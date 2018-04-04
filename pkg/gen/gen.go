@@ -74,6 +74,9 @@ func (r Results) String() string {
 		if i > 0 {
 			fmt.Fprint(w, ", ")
 		}
+		if ret.Name != "" {
+			fmt.Fprintf(w, "%s ", ret.Name)
+		}
 		fmt.Fprintf(w, "%s", ret.Type)
 	}
 	fmt.Fprint(w, ")") // closing bracket
