@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"strings"
 	"unicode"
 
 	"github.com/Bo0mer/gentools/pkg/gen"
@@ -27,6 +28,7 @@ func main() {
 		os.Exit(1)
 	}
 
+	writeConstructor(os.Stdout, recv)
 	writeDecl(os.Stdout, recv)
 	writeMethods(os.Stdout, recv)
 }
@@ -88,8 +90,33 @@ func buildReceiver(pkgpath, ifacename, concname string) (*gen.Receiver, error) {
 	return recv, nil
 }
 
+func writeConstructor(w io.Writer, recv *gen.Receiver) {
+
+	ifaceName := recv.Interface
+	if strings.Contains(ifaceName, ".") {
+		ifaceName = strings.Split(ifaceName, ".")[1]
+	}
+	fmt.Fprintf(w, `
+	// NewMonitoring%s emits metrics for executed operations. The number of
+	// total operations is accumulated in totalOps, while the number of failed
+	// operations is accumulated in failedOps. In addition, the duration for each
+	// operation (no matter whether it failed or not) is recorded in opsDuration.
+	// All measurements are labeled by operation name, thus the metrics should have
+	// a single label field 'operation'.
+	func NewMonitoring%s(next %s, totalOps, failedOps metrics.Counter, opsDuration metrics.Histogram) %s {
+		return &%s{
+			totalOps:    totalOps,
+			failedOps:   failedOps,
+			opsDuration: opsDuration,
+			next:        next,
+		}
+	}`, ifaceName, ifaceName, ifaceName, ifaceName, recv.TypeName)
+}
+
 func writeDecl(w io.Writer, recv *gen.Receiver) {
-	fmt.Fprintf(w, `type %s struct {
+	fmt.Fprintf(w, `
+	// Generated using github.com/Bo0mer/gentools/cmd/mongen.
+	type %s struct {
 		totalOps metrics.Counter
 		failedOps metrics.Counter
 		opsDuration metrics.Histogram
