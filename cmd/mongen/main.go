@@ -28,9 +28,21 @@ func main() {
 		os.Exit(1)
 	}
 
+	writePackageName(os.Stdout, recv)
+	recv.Interface = removePackageName(recv.Interface)
 	writeConstructor(os.Stdout, recv)
 	writeDecl(os.Stdout, recv)
 	writeMethods(os.Stdout, recv)
+}
+
+func removePackageName(identifier string) string {
+	lastDot := strings.LastIndex(identifier, ".")
+	return string(identifier[lastDot+1:])
+}
+
+func writePackageName(w io.Writer, recv *gen.Receiver) {
+	pkg := strings.Split(recv.Interface, ".")[0]
+	fmt.Fprintf(w, "package %s\n\n", pkg)
 }
 
 func buildReceiver(pkgpath, ifacename, concname string) (*gen.Receiver, error) {

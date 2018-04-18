@@ -31,9 +31,17 @@ func main() {
 		os.Exit(1)
 	}
 
+	writePackageName(os.Stdout, recv)
+	writeSimpleUsageToHelpGoImports(os.Stdout)
+	recv.Interface = removePackageName(recv.Interface)
 	writeConstructor(os.Stdout, recv, level)
 	writeDecl(os.Stdout, recv)
 	writeMethods(os.Stdout, recv, level)
+}
+
+func removePackageName(identifier string) string {
+	lastDot := strings.LastIndex(identifier, ".")
+	return string(identifier[lastDot+1:])
 }
 
 func buildReceiver(pkgpath, ifacename, concname string) (*gen.Receiver, error) {
@@ -93,6 +101,15 @@ func buildReceiver(pkgpath, ifacename, concname string) (*gen.Receiver, error) {
 	return recv, nil
 }
 
+func writePackageName(w io.Writer, recv *gen.Receiver) {
+	pkg := strings.Split(recv.Interface, ".")[0]
+	fmt.Fprintf(w, "package %s\n\n", pkg)
+}
+
+func writeSimpleUsageToHelpGoImports(w io.Writer) {
+	fmt.Fprintf(w, "var _ = log.NewJSONLogger\n")
+}
+
 func writeConstructor(w io.Writer, recv *gen.Receiver, level string) {
 
 	msg := map[string]string{
@@ -104,9 +121,6 @@ func writeConstructor(w io.Writer, recv *gen.Receiver, level string) {
 	}
 
 	ifaceName := recv.Interface
-	if strings.Contains(ifaceName, ".") {
-		ifaceName = strings.Split(ifaceName, ".")[1]
-	}
 	lvl := strings.Title(level)
 	fmt.Fprintf(w, `
 	// New%sLogging%s %s.
@@ -236,7 +250,7 @@ func writeErrorCall(w io.Writer, method *gen.Method) {
 		if %s != nil {
 			l.log.Log(
 				"method", "%s",
-				"error", %s,
+				"error", %s.Error(),
 			)
 		}
 		`, lastArg.Name, method.Name, lastArg.Name)
