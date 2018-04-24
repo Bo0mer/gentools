@@ -1,38 +1,75 @@
 package main
 
 import (
+	"bytes"
+	"flag"
 	"fmt"
 	"go/types"
 	"io"
-	"log"
 	"os"
 	"strings"
 	"unicode"
 
 	"github.com/Bo0mer/gentools/pkg/gen"
 	"golang.org/x/tools/go/loader"
+	"golang.org/x/tools/imports"
 )
 
-const usage = "Usage: mongen <package> <interface>"
+const usage = `Usage: mongen [flags] <package> <interface>
+  -w <file> write result to (source) file instead of stdout
+`
+
+var (
+	output string
+)
+
+func init() {
+	flag.StringVar(&output, "w", "", "Write output to file")
+}
 
 func main() {
-	if len(os.Args) != 3 {
-		log.Fatal(usage)
+	flag.Parse()
+	if flag.NArg() != 2 {
+		fmt.Fprintf(os.Stderr, usage)
+		os.Exit(2)
 	}
-	pkgpath, ifacename := os.Args[1], os.Args[2]
+
+	pkgpath, ifacename := flag.Arg(0), flag.Arg(1)
 
 	concname := fmt.Sprintf("monitoring%s", ifacename)
 	recv, err := buildReceiver(pkgpath, ifacename, concname)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "logen: %s", err)
+		fmt.Fprintf(os.Stderr, "mogen: %s", err)
 		os.Exit(1)
 	}
 
-	writePackageName(os.Stdout, recv)
+	code := new(bytes.Buffer)
+	writePackageName(code, recv)
+	writeImports(code)
 	recv.Interface = removePackageName(recv.Interface)
-	writeConstructor(os.Stdout, recv)
-	writeDecl(os.Stdout, recv)
-	writeMethods(os.Stdout, recv)
+	writeConstructor(code, recv)
+	writeDecl(code, recv)
+	writeMethods(code, recv)
+
+	var out = os.Stdout
+	if output != "" {
+		out, err = os.Create(output)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "mogen: error creating output file: %v", err)
+			os.Exit(1)
+		}
+		defer out.Close()
+	} else {
+		output = "monmw.go"
+	}
+
+	fmted, err := imports.Process(output, code.Bytes(), nil)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "mogen: error adding imports: %v", err)
+		os.Exit(1)
+	}
+
+	out.Write(fmted)
 }
 
 func removePackageName(identifier string) string {
@@ -43,6 +80,16 @@ func removePackageName(identifier string) string {
 func writePackageName(w io.Writer, recv *gen.Receiver) {
 	pkg := strings.Split(recv.Interface, ".")[0]
 	fmt.Fprintf(w, "package %s\n\n", pkg)
+}
+
+func writeImports(w io.Writer) {
+	fmt.Fprintf(w, `
+import (
+	"time"
+
+	"github.com/go-kit/kit/metrics"
+)
+`)
 }
 
 func buildReceiver(pkgpath, ifacename, concname string) (*gen.Receiver, error) {
@@ -139,12 +186,12 @@ func writeDecl(w io.Writer, recv *gen.Receiver) {
 
 func writeMethods(w io.Writer, r *gen.Receiver) {
 	for _, method := range r.Methods {
-		writeSignature(os.Stdout, r, &method)
+		writeSignature(w, r, &method)
 		// method opening bracket
 		fmt.Fprintln(w, "{")
-		writeMethodBody(os.Stdout, r, &method)
+		writeMethodBody(w, r, &method)
 
-		writeReturnStatement(os.Stdout, r, &method)
+		writeReturnStatement(w, r, &method)
 
 		// method closing bracket
 		fmt.Fprint(w, "}\n\n")
