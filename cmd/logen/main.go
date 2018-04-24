@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"flag"
 	"fmt"
 	"go/types"
 	"io"
@@ -10,16 +12,29 @@ import (
 
 	"github.com/Bo0mer/gentools/pkg/gen"
 	"golang.org/x/tools/go/loader"
+	"golang.org/x/tools/imports"
 )
 
-const usage = "Usage: logen <package> <interface> <level>"
+const usage = `Usage: logen [flags] <package> <interface> <level>
+  -w <file> write result to (source) file instead of stdout
+`
+
+var (
+	output string
+)
+
+func init() {
+	flag.StringVar(&output, "w", "", "Write output to file")
+}
 
 func main() {
-	if len(os.Args) != 4 {
-		log.Fatal(usage)
+	flag.Parse()
+	if flag.NArg() != 3 {
+		fmt.Fprintf(os.Stderr, usage)
+		os.Exit(2)
 	}
 
-	pkgpath, ifacename, level := os.Args[1], os.Args[2], os.Args[3]
+	pkgpath, ifacename, level := flag.Arg(0), flag.Arg(1), flag.Arg(2)
 	if level != "debug" && level != "error" {
 		log.Fatal(usage)
 	}
@@ -31,12 +46,33 @@ func main() {
 		os.Exit(1)
 	}
 
-	writePackageName(os.Stdout, recv)
-	writeSimpleUsageToHelpGoImports(os.Stdout)
+	code := new(bytes.Buffer)
+	writePackageName(code, recv)
+	writeImports(code)
 	recv.Interface = removePackageName(recv.Interface)
-	writeConstructor(os.Stdout, recv, level)
-	writeDecl(os.Stdout, recv)
-	writeMethods(os.Stdout, recv, level)
+	writeConstructor(code, recv, level)
+	writeDecl(code, recv)
+	writeMethods(code, recv, level)
+
+	var out = os.Stdout
+	if output != "" {
+		out, err = os.Create(output)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "mogen: error creating output file: %v", err)
+			os.Exit(1)
+		}
+		defer out.Close()
+	} else {
+		output = "logmw.go"
+	}
+
+	fmted, err := imports.Process(output, code.Bytes(), nil)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "mogen: error adding imports: %v", err)
+		os.Exit(1)
+	}
+
+	out.Write(fmted)
 }
 
 func removePackageName(identifier string) string {
@@ -106,8 +142,14 @@ func writePackageName(w io.Writer, recv *gen.Receiver) {
 	fmt.Fprintf(w, "package %s\n\n", pkg)
 }
 
-func writeSimpleUsageToHelpGoImports(w io.Writer) {
-	fmt.Fprintf(w, "var _ = log.NewJSONLogger\n")
+func writeImports(w io.Writer) {
+	fmt.Fprintf(w, `
+import (
+	"time"
+
+	"github.com/go-kit/kit/log"
+)
+`)
 }
 
 func writeConstructor(w io.Writer, recv *gen.Receiver, level string) {
@@ -143,10 +185,10 @@ func writeDecl(w io.Writer, recv *gen.Receiver) {
 
 func writeMethods(w io.Writer, r *gen.Receiver, level string) {
 	for _, method := range r.Methods {
-		writeSignature(os.Stdout, r, &method)
+		writeSignature(w, r, &method)
 		// method opening bracket
 		fmt.Fprint(w, "{")
-		writeLogCall(os.Stdout, r, &method, level)
+		writeLogCall(w, r, &method, level)
 
 		// method closing bracket
 		fmt.Fprint(w, "}\n\n")
@@ -232,6 +274,9 @@ func writeDebugCall(w io.Writer, method *gen.Method) {
 func writeErrorCall(w io.Writer, method *gen.Method) {
 	// Invoke method and capture returned results.
 	nRet := len(method.Results)
+	if nRet == 0 {
+		return
+	}
 	for i, ret := range method.Results {
 		fmt.Fprint(w, ret.Name)
 		switch i {
