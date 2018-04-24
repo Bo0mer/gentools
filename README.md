@@ -3,86 +3,154 @@
 Gentools provides a collection of tools that help by generating Go interface
 implementations that add logging or tracing. 
 
-## Using tracegen
-
-Given the following Go interface definition:
-
-```go
-type Interface interface {
-	SomethingThatNeedsToBeTraced(ctx context.Context, n int) error
-	NoTraceHere(n int) error
-}
-```
-
-`tracegen` will produce the following generated code:
-
-`$ tracegen github.com/Bo0mer/gentools/pkg/example Interface | gofmt`
-
-```go
-type tracingInterface struct {
-	next example.Interface
-}
-
-func (l *tracingInterface) NoTraceHere(n int) error {
-	return l.next.NoTraceHere(n)
-}
-
-func (l *tracingInterface) SomethingThatNeedsToBeTraced(ctx context.Context, n int) error {
-	ctx, span := trace.StartSpan(ctx, "github.com/Bo0mer/gentools/pkg/example.Interface")
-	defer span.End()
-
-	return l.next.SomethingThatNeedsToBeTraced(ctx, n)
-}
-```
-
-The idea is that you just copy-paste the generated code into your source base.
-If any additional context information should be added to the traces, just edit
-the generated code before saving it.
-
 ## Using logen
 
-Given the following Go interface definition:
+Command logen generates interface implementations that add logging. There are
+two options for the log level:
+* `error` - log only invocations that result in a non-nil error.
+* `debug` - log all invocations with input & output parameters, method name and
+  invocation duration. 
+
+Let's see an examle. Given the following Go interface definition:
 
 ```go
+package example // import "github.com/Bo0mer/gentools/pkg/example"
+
 type Interface interface {
-	SomethingThatNeedsToBeTraced(ctx context.Context, n int) error
-	NoTraceHere(n int) error
+	Foo(ctx context.Context, a, b int) (err error)
+	Bar(ctx context.Context, c string) (x string, y int, err error)
 }
 ```
 
-`logen` will produce the following generated code:
+`logen` needs the following invocation:
 
-`$ logen github.com/Bo0mer/gentools/pkg/example Interface | gofmt`
+`$ logen github.com/Bo0mer/gentools/pkg/example Interface error | gofmt`
+
+and will produce the following code:
 
 ```go
-type loggingInterface struct {
-	log  logrus.FieldLogger
-	next example.Interface
+package example
+
+import (
+	"context"
+
+	"github.com/go-kit/kit/log"
+)
+
+// NewErrorLoggingInterface logs all non-nil errors.
+func NewErrorLoggingInterface(next Interface, log log.Logger) Interface {
+	return &errorLoggingInterface{
+		next: next,
+		log:  log,
+	}
 }
 
-func (l *loggingInterface) NoTraceHere(n int) (ret0 error) {
-	start := time.Now()
-	defer func() {
-		l.log.WithFields(logrus.Fields{
-			"method": "NoTraceHere",
-			"took":   time.Since(start).Seconds(),
-			"in_n":   n,
-			"error":  ret0,
-		})
-	}()
-	return l.next.NoTraceHere(n)
+type errorLoggingInterface struct {
+	log  log.Logger
+	next Interface
 }
 
-func (l *loggingInterface) SomethingThatNeedsToBeTraced(ctx context.Context, n int) (ret0 error) {
+func (l *errorLoggingInterface) Bar(ctx context.Context, c string) (x string, y int, err error) {
+	x, y, err = l.next.Bar(ctx, c)
+
+	if err != nil {
+		l.log.Log(
+			"method", "Bar",
+			"error", err.Error(),
+		)
+	}
+	return x, y, err
+}
+
+func (l *errorLoggingInterface) Foo(ctx context.Context, a int, b int) (err error) {
+	err = l.next.Foo(ctx, a, b)
+
+	if err != nil {
+		l.log.Log(
+			"method", "Foo",
+			"error", err.Error(),
+		)
+	}
+	return err
+}
+```
+
+## Using mongen
+
+Command mongen generates interface implementations that add monitoring. Let's
+see an example. Given the following Go interface definition:
+
+```go
+package example // import "github.com/Bo0mer/gentools/pkg/example"
+
+type Interface interface {
+	Foo(ctx context.Context, a, b int) (err error)
+	Bar(ctx context.Context, c string) (x string, y int, err error)
+}
+```
+
+`mogen` needs the following invocation:
+
+`$ mogen github.com/Bo0mer/gentools/pkg/example Interface | gofmt`
+
+and will produce the following code:
+
+```go
+package example
+
+import (
+	"context"
+	"time"
+
+	"github.com/go-kit/kit/metrics"
+)
+
+// NewMonitoringInterface emits metrics for executed operations. The number of
+// total operations is accumulated in totalOps, while the number of failed
+// operations is accumulated in failedOps. In addition, the duration for each
+// operation (no matter whether it failed or not) is recorded in opsDuration.
+// All measurements are labeled by operation name, thus the metrics should have
+// a single label field 'operation'.
+func NewMonitoringInterface(next Interface, totalOps, failedOps metrics.Counter, opsDuration metrics.Histogram) Interface {
+	return &monitoringInterface{
+		totalOps:    totalOps,
+		failedOps:   failedOps,
+		opsDuration: opsDuration,
+		next:        next,
+	}
+}
+
+// Generated using github.com/Bo0mer/gentools/cmd/mongen.
+type monitoringInterface struct {
+	totalOps    metrics.Counter
+	failedOps   metrics.Counter
+	opsDuration metrics.Histogram
+	next        Interface
+}
+
+func (m *monitoringInterface) Bar(ctx context.Context, c string) (x string, y int, err error) {
 	start := time.Now()
-	defer func() {
-		l.log.WithFields(logrus.Fields{
-			"method": "SomethingThatNeedsToBeTraced",
-			"took":   time.Since(start).Seconds(),
-			"in_n":   n,
-			"error":  ret0,
-		})
-	}()
-	return l.next.SomethingThatNeedsToBeTraced(ctx, n)
+	x, y, err = m.next.Bar(ctx, c)
+
+	m.totalOps.With("operation", "bar").Add(1)
+	m.opsDuration.With("operation", "bar").Observe(time.Since(start).Seconds())
+
+	if err != nil {
+		m.failedOps.With("operation", "bar").Add(1)
+	}
+	return x, y, err
+}
+
+func (m *monitoringInterface) Foo(ctx context.Context, a int, b int) (err error) {
+	start := time.Now()
+	err = m.next.Foo(ctx, a, b)
+
+	m.totalOps.With("operation", "foo").Add(1)
+	m.opsDuration.With("operation", "foo").Observe(time.Since(start).Seconds())
+
+	if err != nil {
+		m.failedOps.With("operation", "foo").Add(1)
+	}
+	return err
 }
 ```
