@@ -12,6 +12,7 @@ type Receiver struct {
 	Methods       []Method
 	Interface     string // optional: which interface is implemented by the receiver
 	InterfacePath string
+	PackageName   string // name of the package in which the receiver resides
 }
 
 type Method struct {

@@ -49,7 +49,7 @@ func main() {
 	code := new(bytes.Buffer)
 	writePackageName(code, recv)
 	writeImports(code)
-	recv.Interface = removePackageName(recv.Interface)
+	recv.PackageName, recv.Interface = splitPackageName(recv.Interface)
 	writeConstructor(code, recv, level)
 	writeDecl(code, recv)
 	writeMethods(code, recv, level)
@@ -75,9 +75,9 @@ func main() {
 	out.Write(fmted)
 }
 
-func removePackageName(identifier string) string {
-	lastDot := strings.LastIndex(identifier, ".")
-	return string(identifier[lastDot+1:])
+func splitPackageName(fqid string) (packageName string, identifier string) {
+	s := strings.Split(fqid, ".")
+	return s[0], s[1]
 }
 
 func buildReceiver(pkgpath, ifacename, concname string) (*gen.Receiver, error) {
@@ -198,10 +198,34 @@ func writeMethods(w io.Writer, r *gen.Receiver, level string) {
 func writeSignature(w io.Writer, r *gen.Receiver, method *gen.Method) {
 	// func (f *Foer) Foo
 	fmt.Fprintf(w, "func (%s *%s) %s", r.Name, r.TypeName, method.Name)
+
 	// print arguments
-	fmt.Fprintf(w, method.Args.String())
-	// print return values
-	fmt.Fprintf(w, method.Results.NamedString())
+	fmt.Fprint(w, "(") // opening bracket
+	for i, arg := range method.Args {
+		if i > 0 {
+			fmt.Fprint(w, ", ")
+		}
+		// Remove the package name if the type is from the current package,
+		// otherwise it introduces an import cycle.
+		argType := strings.TrimPrefix(arg.Type, r.PackageName+".")
+		fmt.Fprintf(w, "%s %s", arg.Name, argType)
+	}
+	fmt.Fprint(w, ")") // closing bracket
+
+	// print return values (if any)
+	if len(method.Results) == 0 {
+		return
+	}
+
+	fmt.Fprint(w, "(")
+	for i, ret := range method.Results {
+		if i > 0 {
+			fmt.Fprint(w, ", ")
+		}
+		retType := strings.TrimPrefix(ret.Type, r.PackageName+".")
+		fmt.Fprintf(w, "%s %s", ret.Name, retType)
+	}
+	fmt.Fprint(w, ")")
 }
 
 func writeReturnStatementDebug(w io.Writer, r *gen.Receiver, method *gen.Method) {
