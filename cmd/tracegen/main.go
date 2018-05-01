@@ -132,8 +132,8 @@ func writeTraceCall(w io.Writer, recv *gen.Receiver, method *gen.Method) {
 	}
 
 	fmt.Fprintf(w, `
-	    ctx, span := trace.StartSpan(%s, "%s")
+	    ctx, span := trace.StartSpan(%s, "%s.%s")
         defer span.End()
 
-	`, method.Args[0].Name, recv.InterfacePath)
+	`, method.Args[0].Name, recv.InterfacePath, method.Name)
 }
