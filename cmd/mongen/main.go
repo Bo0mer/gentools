@@ -208,9 +208,19 @@ func writeSignature(w io.Writer, r *gen.Receiver, method *gen.Method) {
 		if i > 0 {
 			fmt.Fprint(w, ", ")
 		}
+
 		// Remove the package name if the type is from the current package,
 		// otherwise it introduces an import cycle.
-		argType := strings.TrimPrefix(arg.Type, r.PackageName+".")
+		pos := 0
+		switch {
+		case strings.HasPrefix(arg.Type, "*"):
+			pos = 1
+		case strings.HasPrefix(arg.Type, "[]"):
+			pos = 2
+		}
+		argType := []byte(arg.Type)
+		argType = append(argType[:pos], bytes.TrimPrefix(argType[pos:], []byte(r.PackageName+"."))...)
+
 		fmt.Fprintf(w, "%s %s", arg.Name, argType)
 	}
 	fmt.Fprint(w, ")") // closing bracket
@@ -225,7 +235,19 @@ func writeSignature(w io.Writer, r *gen.Receiver, method *gen.Method) {
 		if i > 0 {
 			fmt.Fprint(w, ", ")
 		}
-		retType := strings.TrimPrefix(ret.Type, r.PackageName+".")
+
+		// Remove the package name if the type is from the current package,
+		// otherwise it introduces an import cycle.
+		pos := 0
+		switch {
+		case strings.HasPrefix(ret.Type, "*"):
+			pos = 1
+		case strings.HasPrefix(ret.Type, "[]"):
+			pos = 2
+		}
+		retType := []byte(ret.Type)
+		retType = append(retType[:pos], bytes.TrimPrefix(retType[pos:], []byte(r.PackageName+"."))...)
+
 		fmt.Fprintf(w, "%s %s", ret.Name, retType)
 	}
 	fmt.Fprint(w, ")")
