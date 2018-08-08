@@ -54,7 +54,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	typeName := fmt.Sprintf("logging%s", interfaceName)
+	typeName := fmt.Sprintf("errorLogging%s", interfaceName)
 
 	model := newModel(sourcePkgPath, interfaceName, typeName, targetPkg)
 	generator := astgen.Generator{
