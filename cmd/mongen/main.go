@@ -1,304 +1,514 @@
 package main
 
 import (
-	"bytes"
+	"errors"
 	"flag"
 	"fmt"
-	"go/types"
-	"io"
+	"go/ast"
+	"go/build"
+	"go/token"
+	"log"
 	"os"
-	"strings"
+	"path"
+	"path/filepath"
 	"unicode"
 
-	"github.com/Bo0mer/gentools/pkg/gen"
-	"golang.org/x/tools/go/loader"
-	"golang.org/x/tools/imports"
+	"github.com/Bo0mer/gentools/pkg/astgen"
+	"github.com/mokiat/gostub/generator"
+	"github.com/mokiat/gostub/resolution"
 )
 
-const usage = `Usage: mongen [flags] <package> <interface>
-  -w <file> write result to (source) file instead of stdout
-`
+func parseArgs() (sourceDir, interfaceName string, err error) {
+	flag.Parse()
+	if flag.NArg() != 2 {
+		return "", "", errors.New("too many arguments provided")
+	}
 
-var (
-	output string
-)
+	sourceDir = flag.Arg(0)
+	sourceDir, err = filepath.Abs(sourceDir)
+	if err != nil {
+		return "", "", fmt.Errorf("error determining absolute path to source directory: %v", err)
+	}
+	interfaceName = flag.Arg(1)
 
-func init() {
-	flag.StringVar(&output, "w", "", "Write output to file")
+	return sourceDir, interfaceName, nil
 }
 
 func main() {
-	flag.Parse()
-	if flag.NArg() != 2 {
-		fmt.Fprintf(os.Stderr, usage)
-		os.Exit(2)
-	}
-
-	pkgpath, ifacename := flag.Arg(0), flag.Arg(1)
-
-	concname := fmt.Sprintf("monitoring%s", ifacename)
-	recv, err := buildReceiver(pkgpath, ifacename, concname)
+	sourceDir, interfaceName, err := parseArgs()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "mogen: %s", err)
-		os.Exit(1)
+		log.Fatal(err)
 	}
 
-	code := new(bytes.Buffer)
-	writePackageName(code, recv)
-	writeImports(code)
-	recv.PackageName, recv.Interface = splitPackageName(recv.Interface)
-	writeConstructor(code, recv)
-	writeDecl(code, recv)
-	writeMethods(code, recv)
+	sourcePkgPath, err := dirToImport(sourceDir)
+	if err != nil {
+		log.Fatalf("error resolving import path of source directory: %v", err)
+	}
+	targetPkg := path.Base(sourcePkgPath) + "mws"
 
-	var out = os.Stdout
-	if output != "" {
-		out, err = os.Create(output)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "mogen: error creating output file: %v", err)
-			os.Exit(1)
+	locator := resolution.NewLocator()
+
+	context := resolution.NewSingleLocationContext(sourcePkgPath)
+	d, err := locator.FindIdentType(context, ast.NewIdent(interfaceName))
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	typeName := fmt.Sprintf("monitoring%s", interfaceName)
+
+	model := newModel(sourcePkgPath, interfaceName, typeName, targetPkg)
+	generator := astgen.Generator{
+		Model:    model,
+		Locator:  locator,
+		Resolver: generator.NewResolver(model, locator),
+	}
+
+	err = generator.ProcessInterface(d)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	targetPkgPath := filepath.Join(sourceDir, targetPkg)
+	if err := os.MkdirAll(targetPkgPath, 0777); err != nil {
+		log.Fatalf("error creating target package directory: %v", err)
+	}
+
+	fd, err := os.Create(filepath.Join(targetPkgPath, filename(interfaceName)))
+	if err != nil {
+		log.Fatalf("error creating output source file: %v", err)
+	}
+	defer fd.Close()
+
+	err = model.WriteSource(fd)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	wd, _ := os.Getwd()
+	path, err := filepath.Rel(wd, fd.Name())
+	if err != nil {
+		path = fd.Name()
+	}
+	fmt.Printf("Wrote monitoring implementation of %q to %q\n", sourcePkgPath+"."+interfaceName, path)
+}
+
+func filename(interfaceName string) string {
+	return fmt.Sprintf("monitoring_%s.go", toSnakeCase(interfaceName))
+}
+
+func dirToImport(p string) (string, error) {
+	pkg, err := build.ImportDir(p, build.FindOnly)
+	if err != nil {
+		return "", err
+	}
+	return pkg.ImportPath, nil
+}
+
+func importToDir(imp string) (string, error) {
+	pkg, err := build.Import(imp, "", build.FindOnly)
+	if err != nil {
+		return "", err
+	}
+	return pkg.Dir, nil
+}
+
+type constructorBuilder struct {
+	metricsPackageName   string
+	interfacePackageName string
+	interfaceName        string
+}
+
+func newConstructorBuilder(metricsPackageName, packageName, interfaceName string) *constructorBuilder {
+	return &constructorBuilder{
+		metricsPackageName:   metricsPackageName,
+		interfacePackageName: packageName,
+		interfaceName:        interfaceName,
+	}
+}
+
+func (c *constructorBuilder) Build() ast.Decl {
+	funcBody := &ast.BlockStmt{
+		List: []ast.Stmt{
+			&ast.ReturnStmt{
+				Results: []ast.Expr{
+					// TODO(borshukov): Find a better way to do this.
+					ast.NewIdent(fmt.Sprintf("&monitoring%s{next, totalOps, failedOps, opsDuration}", c.interfaceName)),
+				},
+			},
+		},
+	}
+
+	funcName := fmt.Sprintf("NewMonitoring%s", c.interfaceName)
+	return &ast.FuncDecl{
+		Doc: &ast.CommentGroup{
+			List: []*ast.Comment{&ast.Comment{
+				Text: fmt.Sprintf("// %s creates new monitoring middleware.", funcName),
+			}},
+		},
+		Name: ast.NewIdent(funcName),
+		Type: &ast.FuncType{
+			Params: &ast.FieldList{
+				List: []*ast.Field{
+					&ast.Field{
+						Names: []*ast.Ident{ast.NewIdent("next")},
+						Type: &ast.SelectorExpr{
+							X:   ast.NewIdent(c.interfacePackageName),
+							Sel: ast.NewIdent(c.interfaceName),
+						},
+					},
+					&ast.Field{
+						Names: []*ast.Ident{ast.NewIdent("totalOps")},
+						Type: &ast.SelectorExpr{
+							X:   ast.NewIdent(c.metricsPackageName),
+							Sel: ast.NewIdent("Counter"),
+						},
+					},
+					&ast.Field{
+						Names: []*ast.Ident{ast.NewIdent("failedOps")},
+						Type: &ast.SelectorExpr{
+							X:   ast.NewIdent(c.metricsPackageName),
+							Sel: ast.NewIdent("Counter"),
+						},
+					},
+					&ast.Field{
+						Names: []*ast.Ident{ast.NewIdent("opsDuration")},
+						Type: &ast.SelectorExpr{
+							X:   ast.NewIdent(c.metricsPackageName),
+							Sel: ast.NewIdent("Histogram"),
+						},
+					},
+				},
+			},
+			Results: &ast.FieldList{
+				List: []*ast.Field{
+					&ast.Field{
+						Names: []*ast.Ident{ast.NewIdent("")},
+						Type: &ast.SelectorExpr{
+							X:   ast.NewIdent(c.interfacePackageName),
+							Sel: ast.NewIdent(c.interfaceName),
+						},
+					},
+				},
+			},
+		},
+		Body: funcBody,
+	}
+}
+
+// MonitoringMethodBuilder is responsible for creating a method that implements
+// the original method from the interface and does all the measurement and
+// recording logic.
+type MonitoringMethodBuilder struct {
+	methodConfig *astgen.MethodConfig
+	method       *astgen.Method
+
+	totalOps    *ast.SelectorExpr // selector for the struct member
+	failedOps   *ast.SelectorExpr // selector for the struct member
+	opsDuration *ast.SelectorExpr // selector for the struct member
+
+	timePackageAlias string
+}
+
+func NewMonitoringMethodBuilder(structName string, methodConfig *astgen.MethodConfig) *MonitoringMethodBuilder {
+	method := astgen.NewMethod(methodConfig.MethodName, "m", structName)
+
+	selexpr := func(fieldName string) *ast.SelectorExpr {
+		return &ast.SelectorExpr{
+			X:   ast.NewIdent("m"),
+			Sel: ast.NewIdent(fieldName),
 		}
-		defer out.Close()
-	} else {
-		output = "monmw.go"
 	}
 
-	fmted, err := imports.Process(output, code.Bytes(), nil)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "mogen: error adding imports: %v", err)
-		os.Exit(1)
+	return &MonitoringMethodBuilder{
+		methodConfig: methodConfig,
+		method:       method,
+		totalOps:     selexpr("totalOps"),
+		failedOps:    selexpr("failedOps"),
+		opsDuration:  selexpr("opsDuration"),
 	}
-
-	out.Write(fmted)
 }
 
-func splitPackageName(fqid string) (packageName string, identifier string) {
-	s := strings.Split(fqid, ".")
-	return s[0], s[1]
+func (b *MonitoringMethodBuilder) SetTimePackageAlias(alias string) {
+	b.timePackageAlias = alias
 }
 
-func writePackageName(w io.Writer, recv *gen.Receiver) {
-	pkg := strings.Split(recv.Interface, ".")[0]
-	fmt.Fprintf(w, "package %s\n\n", pkg)
+func (b *MonitoringMethodBuilder) Build() ast.Decl {
+	b.method.SetType(&ast.FuncType{
+		Params: &ast.FieldList{
+			List: b.methodConfig.MethodParams,
+		},
+		Results: &ast.FieldList{
+			List: fieldsAsAnonymous(b.methodConfig.MethodResults),
+		},
+	})
+
+	// Add increase total operations statement
+	//   m.totalOps.Add(1)
+	increaseTotalOps := &CounterAddAction{counterField: b.totalOps, operationName: b.methodConfig.MethodName}
+	b.method.AddStatement(increaseTotalOps.Build())
+
+	// Add statement to capture current time
+	//   start := time.Now()
+	b.method.AddStatement(RecordStartTime(b.timePackageAlias).Build())
+
+	// Add method invocation:
+	//   result1, result2 := m.next.Method(arg1, arg2)
+	methodInvocation := NewMethodInvocation(b.methodConfig)
+	methodInvocation.SetReceiver(&ast.SelectorExpr{
+		X:   ast.NewIdent("m"), // receiver name
+		Sel: ast.NewIdent("next"),
+	})
+	b.method.AddStatement(methodInvocation.Build())
+
+	// Record operation duration
+	//   m.opsDuration.Observe(time.Since(start))
+	b.method.AddStatement(NewRecordOpDuraton(b.timePackageAlias, b.opsDuration, b.methodConfig.MethodName).Build())
+
+	// Add increase failed operations statement
+	//   if err != nil { m.failedOps.Add(1) }
+	increaseFailedOps := NewIncreaseFailedOps(b.methodConfig, b.failedOps)
+	b.method.AddStatement(increaseFailedOps.Build())
+
+	// Add return statement
+	//   return result1, result2
+	returnResults := NewReturnResults(b.methodConfig)
+	b.method.AddStatement(returnResults.Build())
+
+	return b.method.Build()
 }
 
-func writeImports(w io.Writer) {
-	fmt.Fprintf(w, `
-import (
-	"time"
-
-	"github.com/go-kit/kit/metrics"
-)
-`)
+type CounterAddAction struct {
+	counterField  *ast.SelectorExpr
+	operationName string
 }
 
-func buildReceiver(pkgpath, ifacename, concname string) (*gen.Receiver, error) {
-	var conf loader.Config
-	conf.Import(pkgpath)
-	lprog, err := conf.Load()
-	if err != nil {
-		return nil, err
-	}
-	pkg := lprog.Package(pkgpath).Pkg
-
-	recv := &gen.Receiver{Name: "m", TypeName: concname}
-	iface := pkg.Scope().Lookup(ifacename)
-	if iface == nil {
-		return nil, fmt.Errorf("could not find decl of %s", ifacename)
-	}
-	if !types.IsInterface(iface.Type()) {
-		return nil, fmt.Errorf("%s is not an interface type", ifacename)
+func (c *CounterAddAction) Build() ast.Stmt {
+	callWithExpr := &ast.CallExpr{
+		Fun: &ast.SelectorExpr{
+			X:   c.counterField,
+			Sel: ast.NewIdent("With"),
+		},
+		Args: []ast.Expr{
+			&ast.BasicLit{Kind: token.STRING, Value: `"operation"`},
+			&ast.BasicLit{Kind: token.STRING, Value: fmt.Sprintf(`"%s"`, toSnakeCase(c.operationName))},
+		},
 	}
 
-	recv.Interface = pkg.Name() + "." + iface.Name()
-	recv.InterfacePath = pkg.Path() + "." + iface.Name()
-	ifaceType := iface.Type().Underlying().(*types.Interface)
+	callAddExpr := &ast.CallExpr{
+		Fun: &ast.SelectorExpr{
+			X:   callWithExpr,
+			Sel: ast.NewIdent("Add"),
+		},
+		Args: []ast.Expr{
+			&ast.BasicLit{Kind: token.FLOAT, Value: "1"},
+		},
+	}
 
-	for i := 0; i < ifaceType.NumMethods(); i++ {
-		f := ifaceType.Method(i)
-		m := gen.Method{Name: f.Name()}
-		s := f.Type().Underlying().(*types.Signature)
+	return &ast.ExprStmt{
+		X: callAddExpr,
+	}
+}
 
-		for i := 0; i < s.Params().Len(); i++ {
-			p := s.Params().At(i)
-			name := p.Name()
-			if name == "" {
-				name = fmt.Sprintf("arg%d", i)
+type MethodInvocation struct {
+	receiver *ast.SelectorExpr
+	method   *astgen.MethodConfig
+}
+
+func (m *MethodInvocation) SetReceiver(s *ast.SelectorExpr) {
+	m.receiver = s
+}
+
+func NewMethodInvocation(method *astgen.MethodConfig) *MethodInvocation {
+	return &MethodInvocation{method: method}
+}
+
+func (m *MethodInvocation) Build() ast.Stmt {
+	resultSelectors := []ast.Expr{}
+	for _, result := range m.method.MethodResults {
+		resultSelectors = append(resultSelectors, ast.NewIdent(result.Names[0].String()))
+	}
+
+	paramSelectors := []ast.Expr{}
+	for _, param := range m.method.MethodParams {
+		paramSelectors = append(paramSelectors, ast.NewIdent(param.Names[0].String()))
+	}
+
+	callExpr := &ast.CallExpr{
+		Fun: &ast.SelectorExpr{
+			X:   m.receiver,
+			Sel: ast.NewIdent(m.method.MethodName),
+		},
+		Args: paramSelectors,
+	}
+
+	if m.method.HasResults() {
+		return &ast.AssignStmt{
+			Lhs: resultSelectors,
+			Tok: token.DEFINE,
+			Rhs: []ast.Expr{
+				callExpr,
+			},
+		}
+	}
+
+	return &ast.ExprStmt{X: callExpr}
+}
+
+type IncreaseFailedOps struct {
+	method       *astgen.MethodConfig
+	counterField *ast.SelectorExpr
+}
+
+func NewIncreaseFailedOps(m *astgen.MethodConfig, counterField *ast.SelectorExpr) *IncreaseFailedOps {
+	return &IncreaseFailedOps{m, counterField}
+}
+
+func (i *IncreaseFailedOps) Build() ast.Stmt {
+	var errorResult ast.Expr
+	for _, result := range i.method.MethodResults {
+		if id, ok := result.Type.(*ast.Ident); ok {
+			if id.Name == "error" {
+				errorResult = ast.NewIdent(result.Names[0].String())
+				break
 			}
-			m.Args = append(m.Args, gen.Arg{
-				Name: name,
-				Type: types.TypeString(p.Type(), (*types.Package).Name),
-			})
 		}
-
-		for i := 0; i < s.Results().Len(); i++ {
-			r := s.Results().At(i)
-			name := r.Name()
-			if name == "" {
-				name = fmt.Sprintf("ret%d", i)
-			}
-
-			m.Results = append(m.Results, gen.Result{
-				Name: name,
-				Type: types.TypeString(r.Type(), (*types.Package).Name),
-			})
-		}
-		recv.Methods = append(recv.Methods, m)
 	}
 
-	return recv, nil
-}
-
-func writeConstructor(w io.Writer, recv *gen.Receiver) {
-
-	ifaceName := recv.Interface
-	if strings.Contains(ifaceName, ".") {
-		ifaceName = strings.Split(ifaceName, ".")[1]
+	if errorResult == nil {
+		return &ast.EmptyStmt{}
 	}
-	fmt.Fprintf(w, `
-	// NewMonitoring%s emits metrics for executed operations. The number of
-	// total operations is accumulated in totalOps, while the number of failed
-	// operations is accumulated in failedOps. In addition, the duration for each
-	// operation (no matter whether it failed or not) is recorded in opsDuration.
-	// All measurements are labeled by operation name, thus the metrics should have
-	// a single label field 'operation'.
-	func NewMonitoring%s(next %s, totalOps, failedOps metrics.Counter, opsDuration metrics.Histogram) %s {
-		return &%s{
-			totalOps:    totalOps,
-			failedOps:   failedOps,
-			opsDuration: opsDuration,
-			next:        next,
-		}
-	}`, ifaceName, ifaceName, ifaceName, ifaceName, recv.TypeName)
-}
 
-func writeDecl(w io.Writer, recv *gen.Receiver) {
-	fmt.Fprintf(w, `
-	// Generated using github.com/Bo0mer/gentools/cmd/mongen.
-	type %s struct {
-		totalOps metrics.Counter
-		failedOps metrics.Counter
-		opsDuration metrics.Histogram
-		next %s
-	}`, recv.TypeName, recv.Interface)
-	fmt.Fprintln(w)
-}
+	callWithExpr := &ast.CallExpr{
+		Fun: &ast.SelectorExpr{
+			X:   i.counterField,
+			Sel: ast.NewIdent("With"),
+		},
+		Args: []ast.Expr{
+			&ast.BasicLit{Kind: token.STRING, Value: `"operation"`},
+			&ast.BasicLit{Kind: token.STRING, Value: fmt.Sprintf(`"%s"`, toSnakeCase(i.method.MethodName))},
+		},
+	}
 
-func writeMethods(w io.Writer, r *gen.Receiver) {
-	for _, method := range r.Methods {
-		writeSignature(w, r, &method)
-		// method opening bracket
-		fmt.Fprintln(w, "{")
-		writeMethodBody(w, r, &method)
+	callAddExpr := &ast.CallExpr{
+		Fun: &ast.SelectorExpr{
+			X:   callWithExpr,
+			Sel: ast.NewIdent("Add"),
+		},
+		Args: []ast.Expr{
+			&ast.BasicLit{Kind: token.FLOAT, Value: "1"},
+		},
+	}
 
-		writeReturnStatement(w, r, &method)
+	callStmt := &ast.ExprStmt{
+		X: callAddExpr,
+	}
 
-		// method closing bracket
-		fmt.Fprint(w, "}\n\n")
+	return &ast.IfStmt{
+		Cond: &ast.BinaryExpr{
+			X:  errorResult,
+			Op: token.NEQ,
+			Y:  ast.NewIdent("nil"),
+		},
+		Body: &ast.BlockStmt{
+			List: []ast.Stmt{callStmt},
+		},
 	}
 }
 
-func writeSignature(w io.Writer, r *gen.Receiver, method *gen.Method) {
-	// func (f *Foer) Foo
-	fmt.Fprintf(w, "func (%s *%s) %s", r.Name, r.TypeName, method.Name)
-
-	// print arguments
-	fmt.Fprint(w, "(") // opening bracket
-	for i, arg := range method.Args {
-		if i > 0 {
-			fmt.Fprint(w, ", ")
-		}
-
-		// Remove the package name if the type is from the current package,
-		// otherwise it introduces an import cycle.
-		pos := 0
-		switch {
-		case strings.HasPrefix(arg.Type, "*"):
-			pos = 1
-		case strings.HasPrefix(arg.Type, "[]"):
-			pos = 2
-		}
-		argType := []byte(arg.Type)
-		argType = append(argType[:pos], bytes.TrimPrefix(argType[pos:], []byte(r.PackageName+"."))...)
-
-		fmt.Fprintf(w, "%s %s", arg.Name, argType)
-	}
-	fmt.Fprint(w, ")") // closing bracket
-
-	// print return values (if any)
-	if len(method.Results) == 0 {
-		return
-	}
-
-	fmt.Fprint(w, "(")
-	for i, ret := range method.Results {
-		if i > 0 {
-			fmt.Fprint(w, ", ")
-		}
-
-		// Remove the package name if the type is from the current package,
-		// otherwise it introduces an import cycle.
-		pos := 0
-		switch {
-		case strings.HasPrefix(ret.Type, "*"):
-			pos = 1
-		case strings.HasPrefix(ret.Type, "[]"):
-			pos = 2
-		}
-		retType := []byte(ret.Type)
-		retType = append(retType[:pos], bytes.TrimPrefix(retType[pos:], []byte(r.PackageName+"."))...)
-
-		fmt.Fprintf(w, "%s %s", ret.Name, retType)
-	}
-	fmt.Fprint(w, ")")
+type ReturnResults struct {
+	method *astgen.MethodConfig
 }
 
-func writeReturnStatement(w io.Writer, r *gen.Receiver, method *gen.Method) {
-	if len(method.Results) == 0 {
-		return
+func NewReturnResults(m *astgen.MethodConfig) *ReturnResults {
+	return &ReturnResults{m}
+}
+
+func (r *ReturnResults) Build() ast.Stmt {
+	resultSelectors := []ast.Expr{}
+	for _, result := range r.method.MethodResults {
+		resultSelectors = append(resultSelectors, ast.NewIdent(result.Names[0].String()))
 	}
-	fmt.Fprint(w, "return ")
-	for i, ret := range method.Results {
-		fmt.Fprint(w, ret.Name)
-		if i < len(method.Results)-1 {
-			w.Write([]byte(","))
-		}
+
+	return &ast.ReturnStmt{
+		Results: resultSelectors,
 	}
 }
 
-func writeMethodBody(w io.Writer, r *gen.Receiver, method *gen.Method) {
-	// Capture start time.
-	fmt.Fprintln(w, `start := time.Now()`)
+type startTimeRecorder struct {
+	timePackageAlias string
+}
 
-	// Invoke method and capture returned results.
-	nRet := len(method.Results)
-	for i, ret := range method.Results {
-		fmt.Fprint(w, ret.Name)
-		switch i {
-		case nRet - 1: // last
-			w.Write([]byte("="))
-		default:
-			w.Write([]byte(","))
-		}
-	}
-	fmt.Fprintf(w, "%s.next.%s%s\n", r.Name, method.Name, method.Args.InvocationString())
+func RecordStartTime(timePackageAlias string) *startTimeRecorder {
+	return &startTimeRecorder{timePackageAlias}
+}
 
-	// Collect measurements.
-	operationName := toSnakeCase(method.Name)
-	fmt.Fprintf(w, `
-	m.totalOps.With("operation", "%s").Add(1)
-	m.opsDuration.With("operation", "%s").Observe(time.Since(start).Seconds())
-	`, operationName, operationName)
-
-	// Iff the last argument is an error, collect failure measurements if needed.
-	if len(method.Results) > 0 && method.Results[nRet-1].Type == "error" {
-		fmt.Fprintf(w, `
-		if %s != nil {
-			m.failedOps.With("operation", "%s").Add(1)
-		}
-		`, method.Results[nRet-1].Name, operationName)
+func (r *startTimeRecorder) Build() ast.Stmt {
+	callExpr := &ast.CallExpr{
+		Fun: &ast.SelectorExpr{
+			X:   ast.NewIdent(r.timePackageAlias),
+			Sel: ast.NewIdent("Now"),
+		},
 	}
 
+	return &ast.AssignStmt{
+		Lhs: []ast.Expr{ast.NewIdent("_start")},
+		Tok: token.DEFINE,
+		Rhs: []ast.Expr{
+			callExpr,
+		},
+	}
+}
+
+type RecordOpDuration struct {
+	timePackageAlias string
+	opsDuration      *ast.SelectorExpr
+	operationName    string
+}
+
+func NewRecordOpDuraton(timePackageAlias string, opsDuration *ast.SelectorExpr, operationName string) *RecordOpDuration {
+	return &RecordOpDuration{
+		timePackageAlias: timePackageAlias,
+		opsDuration:      opsDuration,
+		operationName:    operationName,
+	}
+}
+
+func (r *RecordOpDuration) Build() ast.Stmt {
+	timeSinceCallExpr := &ast.CallExpr{
+		Fun: &ast.SelectorExpr{
+			X:   ast.NewIdent(r.timePackageAlias),
+			Sel: ast.NewIdent("Since"),
+		},
+		Args: []ast.Expr{ast.NewIdent("_start")},
+	}
+
+	durationSecondsExpr := &ast.CallExpr{
+		Fun: &ast.SelectorExpr{
+			X:   timeSinceCallExpr,
+			Sel: ast.NewIdent("Seconds"),
+		},
+	}
+
+	callWithExpr := &ast.CallExpr{
+		Fun: &ast.SelectorExpr{
+			X:   r.opsDuration,
+			Sel: ast.NewIdent("With"),
+		},
+		Args: []ast.Expr{
+			&ast.BasicLit{Kind: token.STRING, Value: `"operation"`},
+			&ast.BasicLit{Kind: token.STRING, Value: fmt.Sprintf(`"%s"`, toSnakeCase(r.operationName))},
+		},
+	}
+
+	observeCallExpr := &ast.CallExpr{
+		Fun: &ast.SelectorExpr{
+			X:   callWithExpr,
+			Sel: ast.NewIdent("Observe"),
+		},
+		Args: []ast.Expr{durationSecondsExpr},
+	}
+
+	return &ast.ExprStmt{X: observeCallExpr}
 }
 
 func toSnakeCase(in string) string {
@@ -313,4 +523,14 @@ func toSnakeCase(in string) string {
 	}
 
 	return string(out)
+}
+
+func fieldsAsAnonymous(fields []*ast.Field) []*ast.Field {
+	result := make([]*ast.Field, len(fields))
+	for i, field := range fields {
+		result[i] = &ast.Field{
+			Type: field.Type,
+		}
+	}
+	return result
 }
