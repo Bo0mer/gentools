@@ -1,348 +1,428 @@
 package main
 
 import (
-	"bytes"
+	"errors"
 	"flag"
 	"fmt"
-	"go/types"
-	"io"
+	"go/ast"
+	"go/build"
+	"go/token"
 	"log"
 	"os"
-	"strings"
+	"path"
+	"path/filepath"
+	"unicode"
 
-	"github.com/Bo0mer/gentools/pkg/gen"
-	"golang.org/x/tools/go/loader"
-	"golang.org/x/tools/imports"
+	"github.com/Bo0mer/gentools/pkg/astgen"
+	"github.com/mokiat/gostub/generator"
+	"github.com/mokiat/gostub/resolution"
 )
 
-const usage = `Usage: logen [flags] <package> <interface> <level>
-  -w <file> write result to (source) file instead of stdout
-`
+func parseArgs() (sourceDir, interfaceName string, err error) {
+	flag.Parse()
+	if flag.NArg() != 2 {
+		return "", "", errors.New("too many arguments provided")
+	}
 
-var (
-	output string
-)
+	sourceDir = flag.Arg(0)
+	sourceDir, err = filepath.Abs(sourceDir)
+	if err != nil {
+		return "", "", fmt.Errorf("error determining absolute path to source directory: %v", err)
+	}
+	interfaceName = flag.Arg(1)
 
-func init() {
-	flag.StringVar(&output, "w", "", "Write output to file")
+	return sourceDir, interfaceName, nil
 }
 
 func main() {
-	flag.Parse()
-	if flag.NArg() != 3 {
-		fmt.Fprintf(os.Stderr, usage)
-		os.Exit(2)
-	}
-
-	pkgpath, ifacename, level := flag.Arg(0), flag.Arg(1), flag.Arg(2)
-	if level != "debug" && level != "error" {
-		log.Fatal(usage)
-	}
-	concname := fmt.Sprintf("%sLogging%s", level, ifacename)
-
-	recv, err := buildReceiver(pkgpath, ifacename, concname)
+	sourceDir, interfaceName, err := parseArgs()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "logen: %s", err)
-		os.Exit(1)
+		log.Fatal(err)
 	}
 
-	code := new(bytes.Buffer)
-	writePackageName(code, recv)
-	writeImports(code)
-	recv.PackageName, recv.Interface = splitPackageName(recv.Interface)
-	writeConstructor(code, recv, level)
-	writeDecl(code, recv)
-	writeMethods(code, recv, level)
-
-	var out = os.Stdout
-	if output != "" {
-		out, err = os.Create(output)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "mogen: error creating output file: %v", err)
-			os.Exit(1)
-		}
-		defer out.Close()
-	} else {
-		output = "logmw.go"
-	}
-
-	fmted, err := imports.Process(output, code.Bytes(), nil)
+	sourcePkgPath, err := dirToImport(sourceDir)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "mogen: error adding imports: %v", err)
-		os.Exit(1)
+		log.Fatalf("error resolving import path of source directory: %v", err)
 	}
+	targetPkg := path.Base(sourcePkgPath) + "mws"
 
-	out.Write(fmted)
-}
+	locator := resolution.NewLocator()
 
-func splitPackageName(fqid string) (packageName string, identifier string) {
-	s := strings.Split(fqid, ".")
-	return s[0], s[1]
-}
-
-func buildReceiver(pkgpath, ifacename, concname string) (*gen.Receiver, error) {
-	// The loader loads a complete Go program from source code.
-	var conf loader.Config
-	conf.Import(pkgpath)
-	lprog, err := conf.Load()
+	context := resolution.NewSingleLocationContext(sourcePkgPath)
+	d, err := locator.FindIdentType(context, ast.NewIdent(interfaceName))
 	if err != nil {
-		log.Fatal(err) // load error
-	}
-	pkg := lprog.Package(pkgpath).Pkg
-
-	recv := &gen.Receiver{Name: "l", TypeName: concname}
-	iface := pkg.Scope().Lookup(ifacename)
-	if iface == nil {
-		return nil, fmt.Errorf("could not find decl of %s", ifacename)
-	}
-	if !types.IsInterface(iface.Type()) {
-		return nil, fmt.Errorf("%s is not an interface type", ifacename)
+		log.Fatal(err)
 	}
 
-	recv.Interface = pkg.Name() + "." + iface.Name()
-	ifaceType := iface.Type().Underlying().(*types.Interface)
+	typeName := fmt.Sprintf("errorLogging%s", interfaceName)
 
-	for i := 0; i < ifaceType.NumMethods(); i++ {
-		f := ifaceType.Method(i)
-		m := gen.Method{Name: f.Name()}
-		s := f.Type().Underlying().(*types.Signature)
-
-		for i := 0; i < s.Params().Len(); i++ {
-			p := s.Params().At(i)
-			name := p.Name()
-			if name == "" {
-				name = fmt.Sprintf("arg%d", i)
-			}
-			m.Args = append(m.Args, gen.Arg{
-				Name: name,
-				Type: types.TypeString(p.Type(), (*types.Package).Name),
-			})
-		}
-
-		for i := 0; i < s.Results().Len(); i++ {
-			r := s.Results().At(i)
-			name := r.Name()
-			if name == "" {
-				name = fmt.Sprintf("ret%d", i)
-			}
-
-			m.Results = append(m.Results, gen.Result{
-				Name: name,
-				Type: types.TypeString(r.Type(), (*types.Package).Name),
-			})
-		}
-		recv.Methods = append(recv.Methods, m)
+	model := newModel(sourcePkgPath, interfaceName, typeName, targetPkg)
+	generator := astgen.Generator{
+		Model:    model,
+		Locator:  locator,
+		Resolver: generator.NewResolver(model, locator),
 	}
 
-	return recv, nil
+	err = generator.ProcessInterface(d)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	targetPkgPath := filepath.Join(sourceDir, targetPkg)
+	if err := os.MkdirAll(targetPkgPath, 0777); err != nil {
+		log.Fatalf("error creating target package directory: %v", err)
+	}
+
+	fd, err := os.Create(filepath.Join(targetPkgPath, filename(interfaceName)))
+	if err != nil {
+		log.Fatalf("error creating output source file: %v", err)
+	}
+	defer fd.Close()
+
+	err = model.WriteSource(fd)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	wd, _ := os.Getwd()
+	path, err := filepath.Rel(wd, fd.Name())
+	if err != nil {
+		path = fd.Name()
+	}
+	fmt.Printf("Wrote logging implementation of %q to %q\n", sourcePkgPath+"."+interfaceName, path)
 }
 
-func writePackageName(w io.Writer, recv *gen.Receiver) {
-	pkg := strings.Split(recv.Interface, ".")[0]
-	fmt.Fprintf(w, "package %s\n\n", pkg)
+func filename(interfaceName string) string {
+	return fmt.Sprintf("logging_%s.go", toSnakeCase(interfaceName))
 }
 
-func writeImports(w io.Writer) {
-	fmt.Fprintf(w, `
-import (
-	"time"
-
-	"github.com/go-kit/kit/log"
-)
-`)
-}
-
-func writeConstructor(w io.Writer, recv *gen.Receiver, level string) {
-
-	msg := map[string]string{
-		"debug": `logs all method invocations of next, including all
-// parameters and return values.
-//
-// DO NOT USE IN PRODUCTION ENVIRONMENTS`,
-		"error": "logs all non-nil errors",
+func dirToImport(p string) (string, error) {
+	pkg, err := build.ImportDir(p, build.FindOnly)
+	if err != nil {
+		return "", err
 	}
+	return pkg.ImportPath, nil
+}
 
-	ifaceName := recv.Interface
-	lvl := strings.Title(level)
-	fmt.Fprintf(w, `
-	// New%sLogging%s %s.
-	func New%sLogging%s(next %s, log log.Logger) %s {
-		return &%s{
-			next:        next,
-			log: log,
-		}
+func importToDir(imp string) (string, error) {
+	pkg, err := build.Import(imp, "", build.FindOnly)
+	if err != nil {
+		return "", err
 	}
-	`, lvl, ifaceName, msg[level], lvl, ifaceName, ifaceName, ifaceName, recv.TypeName)
+	return pkg.Dir, nil
 }
 
-func writeDecl(w io.Writer, recv *gen.Receiver) {
-	fmt.Fprintf(w, `type %s struct {
-		log log.Logger
-		next %s
-	}`, recv.TypeName, recv.Interface)
-	fmt.Fprintln(w)
+type constructorBuilder struct {
+	logPackageName       string
+	interfacePackageName string
+	interfaceName        string
 }
 
-func writeMethods(w io.Writer, r *gen.Receiver, level string) {
-	for _, method := range r.Methods {
-		writeSignature(w, r, &method)
-		// method opening bracket
-		fmt.Fprint(w, "{")
-		writeLogCall(w, r, &method, level)
-
-		// method closing bracket
-		fmt.Fprint(w, "}\n\n")
+func newConstructorBuilder(logPackageName, packageName, interfaceName string) *constructorBuilder {
+	return &constructorBuilder{
+		logPackageName:       logPackageName,
+		interfacePackageName: packageName,
+		interfaceName:        interfaceName,
 	}
 }
 
-func writeSignature(w io.Writer, r *gen.Receiver, method *gen.Method) {
-	// func (f *Foer) Foo
-	fmt.Fprintf(w, "func (%s *%s) %s", r.Name, r.TypeName, method.Name)
-
-	// print arguments
-	fmt.Fprint(w, "(") // opening bracket
-	for i, arg := range method.Args {
-		if i > 0 {
-			fmt.Fprint(w, ", ")
-		}
-		// Remove the package name if the type is from the current package,
-		// otherwise it introduces an import cycle.
-		pos := 0
-		switch {
-		case strings.HasPrefix(arg.Type, "*"):
-			pos = 1
-		case strings.HasPrefix(arg.Type, "[]"):
-			pos = 2
-		}
-		argType := []byte(arg.Type)
-		argType = append(argType[:pos], bytes.TrimPrefix(argType[pos:], []byte(r.PackageName+"."))...)
-
-		fmt.Fprintf(w, "%s %s", arg.Name, argType)
-	}
-	fmt.Fprint(w, ")") // closing bracket
-
-	// print return values (if any)
-	if len(method.Results) == 0 {
-		return
+func (c *constructorBuilder) Build() ast.Decl {
+	funcBody := &ast.BlockStmt{
+		List: []ast.Stmt{
+			&ast.ReturnStmt{
+				Results: []ast.Expr{
+					// TODO(borshukov): Find a better way to do this.
+					ast.NewIdent(fmt.Sprintf("&errorLogging%s{next, logger}", c.interfaceName)),
+				},
+			},
+		},
 	}
 
-	fmt.Fprint(w, "(")
-	for i, ret := range method.Results {
-		if i > 0 {
-			fmt.Fprint(w, ", ")
-		}
-
-		// Remove the package name if the type is from the current package,
-		// otherwise it introduces an import cycle.
-		pos := 0
-		switch {
-		case strings.HasPrefix(ret.Type, "*"):
-			pos = 1
-		case strings.HasPrefix(ret.Type, "[]"):
-			pos = 2
-		}
-		retType := []byte(ret.Type)
-		retType = append(retType[:pos], bytes.TrimPrefix(retType[pos:], []byte(r.PackageName+"."))...)
-
-		fmt.Fprintf(w, "%s %s", ret.Name, retType)
-	}
-	fmt.Fprint(w, ")")
-}
-
-func writeReturnStatementDebug(w io.Writer, r *gen.Receiver, method *gen.Method) {
-	if len(method.Results) > 0 {
-		fmt.Fprintf(w, "return ")
-	}
-	fmt.Fprintf(w, "%s.next.%s%s\n", r.Name, method.Name, method.Args.InvocationString())
-}
-
-func writeReturnStatementError(w io.Writer, r *gen.Receiver, method *gen.Method) {
-	if len(method.Results) == 0 {
-		return
-	}
-	fmt.Fprint(w, "return ")
-	for i, ret := range method.Results {
-		fmt.Fprint(w, ret.Name)
-		if i < len(method.Results)-1 {
-			w.Write([]byte(","))
-		}
+	funcName := fmt.Sprintf("NewErrorLogging%s", c.interfaceName)
+	return &ast.FuncDecl{
+		Doc: &ast.CommentGroup{
+			List: []*ast.Comment{&ast.Comment{
+				Text: fmt.Sprintf("// %s creates new error logging middleware.", funcName),
+			}},
+		},
+		Name: ast.NewIdent(funcName),
+		Type: &ast.FuncType{
+			Params: &ast.FieldList{
+				List: []*ast.Field{
+					&ast.Field{
+						Names: []*ast.Ident{ast.NewIdent("next")},
+						Type: &ast.SelectorExpr{
+							X:   ast.NewIdent(c.interfacePackageName),
+							Sel: ast.NewIdent(c.interfaceName),
+						},
+					},
+					&ast.Field{
+						Names: []*ast.Ident{ast.NewIdent("logger")},
+						Type: &ast.SelectorExpr{
+							X:   ast.NewIdent(c.logPackageName),
+							Sel: ast.NewIdent("Logger"),
+						},
+					},
+				},
+			},
+			Results: &ast.FieldList{
+				List: []*ast.Field{
+					&ast.Field{
+						Names: []*ast.Ident{ast.NewIdent("")},
+						Type: &ast.SelectorExpr{
+							X:   ast.NewIdent(c.interfacePackageName),
+							Sel: ast.NewIdent(c.interfaceName),
+						},
+					},
+				},
+			},
+		},
+		Body: funcBody,
 	}
 }
 
-func writeLogCall(w io.Writer, r *gen.Receiver, method *gen.Method, level string) {
-	switch level {
-	case "debug":
-		writeDebugCall(w, method)
-		writeReturnStatementDebug(w, r, method)
-	case "error":
-		writeErrorCall(w, method)
-		writeReturnStatementError(w, r, method)
-	default:
-		panic("unknown log level " + level)
-	}
-
+type LoggingMethodBuilder struct {
+	methodConfig *astgen.MethodConfig
+	method       *astgen.Method
 }
 
-func writeDebugCall(w io.Writer, method *gen.Method) {
-	fmt.Fprintf(w, `
-		start := time.Now()
-		defer func() {
-			l.log.Log(
-				"method", "%s",
-				"took", time.Since(start).Seconds(),`, method.Name)
-	fmt.Fprintln(w)
+func NewLoggingMethodBuilder(structName string, methodConfig *astgen.MethodConfig) *LoggingMethodBuilder {
+	method := astgen.NewMethod(methodConfig.MethodName, "m", structName)
 
-	for _, arg := range method.Args {
-		if arg.Type == "context.Context" {
-			continue
+	return &LoggingMethodBuilder{
+		methodConfig: methodConfig,
+		method:       method,
+	}
+}
+func (b *LoggingMethodBuilder) Build() ast.Decl {
+	b.method.SetType(&ast.FuncType{
+		Params: &ast.FieldList{
+			List: b.methodConfig.MethodParams,
+		},
+		Results: &ast.FieldList{
+			List: fieldsAsAnonymous(b.methodConfig.MethodResults),
+		},
+	})
+
+	// Add method invocation:
+	//   result1, result2 := m.next.Method(arg1, arg2)
+	methodInvocation := NewMethodInvocation(b.methodConfig)
+	methodInvocation.SetReceiver(&ast.SelectorExpr{
+		X:   ast.NewIdent("m"), // receiver name
+		Sel: ast.NewIdent("next"),
+	})
+	b.method.AddStatement(methodInvocation.Build())
+
+	// Log if an error has occurred.
+	//   if err != nil { m.logger.Log("message", err.Error()) }
+	n := len(b.methodConfig.MethodResults)
+	if n > 0 {
+		last := b.methodConfig.MethodResults[n-1]
+		if id, ok := last.Type.(*ast.Ident); ok && id.Name == "error" {
+			b.method.AddStatement(conditionalLogMessageStatement(b.methodConfig.MethodName, last.Names[0].Name))
 		}
-		fmt.Fprintf(w, `"in_%s",%s,`, arg.Name, arg.Name)
-		fmt.Fprintln(w)
 	}
 
-	for i, res := range method.Results {
-		if res.Type == "error" {
-			fmt.Fprintf(w, `"error",%s,`, res.Name)
+	// Add return statement
+	//   return result1, result2
+	returnResults := NewReturnResults(b.methodConfig)
+	b.method.AddStatement(returnResults.Build())
 
-			// If the method returns only error, add the trailing newline.
-			if i == len(method.Results)-1 {
-				fmt.Fprintln(w)
-			}
-			continue
-		}
-		fmt.Fprintf(w, `"result_%s",%s,`, res.Name, res.Name)
-		fmt.Fprintln(w)
-	}
-	fmt.Fprintln(w, ")\n}()")
+	return b.method.Build()
 }
 
-func writeErrorCall(w io.Writer, method *gen.Method) {
-	// Invoke method and capture returned results.
-	nRet := len(method.Results)
-	if nRet == 0 {
-		return
+func conditionalLogMessageStatement(methodName, errorResultName string) ast.Stmt {
+	callLogExpr := &ast.CallExpr{
+		Fun: &ast.SelectorExpr{
+			X:   &ast.SelectorExpr{X: ast.NewIdent("m"), Sel: ast.NewIdent("logger")},
+			Sel: ast.NewIdent("Log"),
+		},
+		Args: []ast.Expr{
+			&ast.BasicLit{Kind: token.STRING, Value: `"method"`},
+			&ast.BasicLit{Kind: token.STRING, Value: fmt.Sprintf("%q", methodName)},
+			&ast.BasicLit{Kind: token.STRING, Value: `"error"`},
+			&ast.CallExpr{
+				Fun: &ast.SelectorExpr{
+					X:   ast.NewIdent(errorResultName),
+					Sel: ast.NewIdent("Error"),
+				},
+			},
+		},
 	}
-	for i, ret := range method.Results {
-		fmt.Fprint(w, ret.Name)
-		switch i {
-		case nRet - 1: // last
-			w.Write([]byte("="))
-		default:
-			w.Write([]byte(","))
-		}
-	}
-	fmt.Fprintf(w, "l.next.%s%s\n", method.Name, method.Args.InvocationString())
 
-	// Iff the last argument is an error, log if needed.
-	lastArg := method.Results[nRet-1]
-	if len(method.Results) > 0 && lastArg.Type == "error" {
-		fmt.Fprintf(w, `
-		if %s != nil {
-			l.log.Log(
-				"method", "%s",
-				"error", %s.Error(),
-			)
-		}
-		`, lastArg.Name, method.Name, lastArg.Name)
+	return &ast.IfStmt{
+		Cond: &ast.BinaryExpr{
+			X:  ast.NewIdent(errorResultName),
+			Op: token.NEQ,
+			Y:  ast.NewIdent("nil"),
+		},
+		Body: &ast.BlockStmt{
+			List: []ast.Stmt{&ast.ExprStmt{X: callLogExpr}},
+		},
 	}
+}
+
+type MethodInvocation struct {
+	receiver *ast.SelectorExpr
+	method   *astgen.MethodConfig
+}
+
+func (m *MethodInvocation) SetReceiver(s *ast.SelectorExpr) {
+	m.receiver = s
+}
+
+func NewMethodInvocation(method *astgen.MethodConfig) *MethodInvocation {
+	return &MethodInvocation{method: method}
+}
+
+func (m *MethodInvocation) Build() ast.Stmt {
+	resultSelectors := []ast.Expr{}
+	for _, result := range m.method.MethodResults {
+		resultSelectors = append(resultSelectors, ast.NewIdent(result.Names[0].String()))
+	}
+
+	paramSelectors := []ast.Expr{}
+	for _, param := range m.method.MethodParams {
+		paramSelectors = append(paramSelectors, ast.NewIdent(param.Names[0].String()))
+	}
+
+	callExpr := &ast.CallExpr{
+		Fun: &ast.SelectorExpr{
+			X:   m.receiver,
+			Sel: ast.NewIdent(m.method.MethodName),
+		},
+		Args: paramSelectors,
+	}
+
+	if m.method.HasResults() {
+		return &ast.AssignStmt{
+			Lhs: resultSelectors,
+			Tok: token.DEFINE,
+			Rhs: []ast.Expr{
+				callExpr,
+			},
+		}
+	}
+
+	return &ast.ExprStmt{X: callExpr}
+}
+
+type ReturnResults struct {
+	method *astgen.MethodConfig
+}
+
+func NewReturnResults(m *astgen.MethodConfig) *ReturnResults {
+	return &ReturnResults{m}
+}
+
+func (r *ReturnResults) Build() ast.Stmt {
+	resultSelectors := []ast.Expr{}
+	for _, result := range r.method.MethodResults {
+		resultSelectors = append(resultSelectors, ast.NewIdent(result.Names[0].String()))
+	}
+
+	return &ast.ReturnStmt{
+		Results: resultSelectors,
+	}
+}
+
+type startTimeRecorder struct {
+	timePackageAlias string
+}
+
+func RecordStartTime(timePackageAlias string) *startTimeRecorder {
+	return &startTimeRecorder{timePackageAlias}
+}
+
+func (r *startTimeRecorder) Build() ast.Stmt {
+	callExpr := &ast.CallExpr{
+		Fun: &ast.SelectorExpr{
+			X:   ast.NewIdent(r.timePackageAlias),
+			Sel: ast.NewIdent("Now"),
+		},
+	}
+
+	return &ast.AssignStmt{
+		Lhs: []ast.Expr{ast.NewIdent("_start")},
+		Tok: token.DEFINE,
+		Rhs: []ast.Expr{
+			callExpr,
+		},
+	}
+}
+
+type RecordOpDuration struct {
+	timePackageAlias string
+	opsDuration      *ast.SelectorExpr
+	operationName    string
+}
+
+func NewRecordOpDuraton(timePackageAlias string, opsDuration *ast.SelectorExpr, operationName string) *RecordOpDuration {
+	return &RecordOpDuration{
+		timePackageAlias: timePackageAlias,
+		opsDuration:      opsDuration,
+		operationName:    operationName,
+	}
+}
+
+func (r *RecordOpDuration) Build() ast.Stmt {
+	timeSinceCallExpr := &ast.CallExpr{
+		Fun: &ast.SelectorExpr{
+			X:   ast.NewIdent(r.timePackageAlias),
+			Sel: ast.NewIdent("Since"),
+		},
+		Args: []ast.Expr{ast.NewIdent("_start")},
+	}
+
+	durationSecondsExpr := &ast.CallExpr{
+		Fun: &ast.SelectorExpr{
+			X:   timeSinceCallExpr,
+			Sel: ast.NewIdent("Seconds"),
+		},
+	}
+
+	callWithExpr := &ast.CallExpr{
+		Fun: &ast.SelectorExpr{
+			X:   r.opsDuration,
+			Sel: ast.NewIdent("With"),
+		},
+		Args: []ast.Expr{
+			&ast.BasicLit{Kind: token.STRING, Value: `"operation"`},
+			&ast.BasicLit{Kind: token.STRING, Value: fmt.Sprintf(`"%s"`, toSnakeCase(r.operationName))},
+		},
+	}
+
+	observeCallExpr := &ast.CallExpr{
+		Fun: &ast.SelectorExpr{
+			X:   callWithExpr,
+			Sel: ast.NewIdent("Observe"),
+		},
+		Args: []ast.Expr{durationSecondsExpr},
+	}
+
+	return &ast.ExprStmt{X: observeCallExpr}
+}
+
+func toSnakeCase(in string) string {
+	runes := []rune(in)
+
+	var out []rune
+	for i := 0; i < len(runes); i++ {
+		if i > 0 && (unicode.IsUpper(runes[i]) || unicode.IsNumber(runes[i])) && ((i+1 < len(runes) && unicode.IsLower(runes[i+1])) || unicode.IsLower(runes[i-1])) {
+			out = append(out, '_')
+		}
+		out = append(out, unicode.ToLower(runes[i]))
+	}
+
+	return string(out)
+}
+
+func fieldsAsAnonymous(fields []*ast.Field) []*ast.Field {
+	result := make([]*ast.Field, len(fields))
+	for i, field := range fields {
+		result[i] = &ast.Field{
+			Type: field.Type,
+		}
+	}
+	return result
 }
