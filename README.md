@@ -27,7 +27,7 @@ type Service interface {
 
 ```bash
 $ mongen path/to/service Service
-Wrote monitoring implementation of "path/to/service.Service" to "servicews/monitoring_service.go"
+Wrote monitoring implementation of "path/to/service.Service" to "path/to/service/servicews/monitoring_service.go"
 ```
 
 ### Using monitoring implementation in your program
