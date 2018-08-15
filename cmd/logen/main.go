@@ -14,8 +14,7 @@ import (
 	"unicode"
 
 	"github.com/Bo0mer/gentools/pkg/astgen"
-	"github.com/mokiat/gostub/generator"
-	"github.com/mokiat/gostub/resolution"
+	"github.com/Bo0mer/gentools/pkg/resolution"
 )
 
 func parseArgs() (sourceDir, interfaceName string, err error) {
@@ -60,7 +59,7 @@ func main() {
 	generator := astgen.Generator{
 		Model:    model,
 		Locator:  locator,
-		Resolver: generator.NewResolver(model, locator),
+		Resolver: resolution.NewResolver(model, locator),
 	}
 
 	err = generator.ProcessInterface(d)

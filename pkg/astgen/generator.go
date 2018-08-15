@@ -5,9 +5,8 @@ import (
 	"fmt"
 	"go/ast"
 
-	"github.com/mokiat/gostub/generator"
-	"github.com/mokiat/gostub/resolution"
-	"github.com/mokiat/gostub/util"
+	"github.com/Bo0mer/gentools/pkg/internal"
+	"github.com/Bo0mer/gentools/pkg/resolution"
 )
 
 // MethodConfig describes a method.
@@ -45,7 +44,7 @@ type ModelBuilder interface {
 type Generator struct {
 	Model    ModelBuilder
 	Locator  *resolution.Locator
-	Resolver *generator.Resolver
+	Resolver *resolution.Resolver
 }
 
 func (g *Generator) ProcessInterface(d resolution.TypeDiscovery) error {
@@ -54,7 +53,7 @@ func (g *Generator) ProcessInterface(d resolution.TypeDiscovery) error {
 	if !isIFace {
 		return errors.New(fmt.Sprintf("type '%s' in '%s' is not interface!", d.Spec.Name.String(), d.Location))
 	}
-	for field := range util.EachFieldInFieldList(iFaceType.Methods) {
+	for field := range internal.EachFieldInFieldList(iFaceType.Methods) {
 		switch t := field.Type.(type) {
 		case *ast.FuncType:
 			g.processMethod(context, field.Names[0].String(), t)
@@ -118,15 +117,15 @@ func (g *Generator) processSubInterfaceSelector(context *resolution.LocatorConte
 func (g *Generator) getNormalizedParams(context *resolution.LocatorContext, funcType *ast.FuncType) ([]*ast.Field, error) {
 	normalizedParams := []*ast.Field{}
 	paramIndex := 1
-	for param := range util.EachFieldInFieldList(funcType.Params) {
-		count := util.FieldTypeReuseCount(param)
+	for param := range internal.EachFieldInFieldList(funcType.Params) {
+		count := internal.FieldTypeReuseCount(param)
 		for i := 0; i < count; i++ {
 			fieldName := fmt.Sprintf("arg%d", paramIndex)
 			fieldType, err := g.Resolver.ResolveType(context, param.Type)
 			if err != nil {
 				return nil, err
 			}
-			normalizedParam := util.CreateField(fieldName, fieldType)
+			normalizedParam := internal.CreateField(fieldName, fieldType)
 			normalizedParams = append(normalizedParams, normalizedParam)
 			paramIndex++
 		}
@@ -137,15 +136,15 @@ func (g *Generator) getNormalizedParams(context *resolution.LocatorContext, func
 func (g *Generator) getNormalizedResults(context *resolution.LocatorContext, funcType *ast.FuncType) ([]*ast.Field, error) {
 	normalizedResults := []*ast.Field{}
 	resultIndex := 1
-	for result := range util.EachFieldInFieldList(funcType.Results) {
-		count := util.FieldTypeReuseCount(result)
+	for result := range internal.EachFieldInFieldList(funcType.Results) {
+		count := internal.FieldTypeReuseCount(result)
 		for i := 0; i < count; i++ {
 			fieldName := fmt.Sprintf("result%d", resultIndex)
 			fieldType, err := g.Resolver.ResolveType(context, result.Type)
 			if err != nil {
 				return nil, err
 			}
-			normalizedResult := util.CreateField(fieldName, fieldType)
+			normalizedResult := internal.CreateField(fieldName, fieldType)
 			normalizedResults = append(normalizedResults, normalizedResult)
 			resultIndex++
 		}
