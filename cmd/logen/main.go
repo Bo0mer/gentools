@@ -17,24 +17,37 @@ import (
 	"github.com/Bo0mer/gentools/pkg/resolution"
 )
 
-func parseArgs() (sourceDir, interfaceName string, err error) {
+func parseArgs() (sourceDir, interfaceName, loggerType string, err error) {
 	flag.Parse()
-	if flag.NArg() != 2 {
-		return "", "", errors.New("too many arguments provided")
+	if flag.NArg() == 2 {
+		loggerType = "stdlog"
+	} else if flag.NArg() != 3 {
+		return "", "", "", errors.New("too many arguments provided")
 	}
 
 	sourceDir = flag.Arg(0)
 	sourceDir, err = filepath.Abs(sourceDir)
 	if err != nil {
-		return "", "", fmt.Errorf("error determining absolute path to source directory: %v", err)
+		return "", "", "", fmt.Errorf("error determining absolute path to source directory: %v", err)
 	}
+
 	interfaceName = flag.Arg(1)
 
-	return sourceDir, interfaceName, nil
+	mapLoggerTypes := map[string]string{"logrus": "logrus", "stdlog": "stdlog", "go_kit_log": "go_kit_log"}
+
+	if loggerType != "stdlog" {
+		loggerType = flag.Arg(2)
+	}
+
+	if _, ok := mapLoggerTypes[loggerType]; !ok {
+		return "", "", "", fmt.Errorf("error determining logger type: %v", err)
+	}
+
+	return sourceDir, interfaceName, loggerType, nil
 }
 
 func main() {
-	sourceDir, interfaceName, err := parseArgs()
+	sourceDir, interfaceName, loggerType, err := parseArgs()
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -55,7 +68,7 @@ func main() {
 
 	typeName := fmt.Sprintf("errorLogging%s", interfaceName)
 
-	model := newModel(sourcePkgPath, interfaceName, typeName, targetPkg)
+	model := newModel(sourcePkgPath, interfaceName, loggerType, typeName, targetPkg)
 	generator := astgen.Generator{
 		Model:    model,
 		Locator:  locator,
@@ -183,14 +196,16 @@ func (c *constructorBuilder) Build() ast.Decl {
 type LoggingMethodBuilder struct {
 	methodConfig *astgen.MethodConfig
 	method       *astgen.Method
+	loggerType   string
 }
 
-func NewLoggingMethodBuilder(structName string, methodConfig *astgen.MethodConfig) *LoggingMethodBuilder {
+func NewLoggingMethodBuilder(structName string, methodConfig *astgen.MethodConfig, loggerType string) *LoggingMethodBuilder {
 	method := astgen.NewMethod(methodConfig.MethodName, "m", structName)
 
 	return &LoggingMethodBuilder{
 		methodConfig: methodConfig,
 		method:       method,
+		loggerType:   loggerType,
 	}
 }
 func (b *LoggingMethodBuilder) Build() ast.Decl {
@@ -218,7 +233,13 @@ func (b *LoggingMethodBuilder) Build() ast.Decl {
 	if n > 0 {
 		last := b.methodConfig.MethodResults[n-1]
 		if id, ok := last.Type.(*ast.Ident); ok && id.Name == "error" {
-			b.method.AddStatement(conditionalLogMessageStatement(b.methodConfig.MethodName, last.Names[0].Name))
+			if b.loggerType == "logrus" {
+				b.method.AddStatement(conditionalLogMessageStatementLogrus(b.methodConfig.MethodName, last.Names[0].Name))
+			} else if b.loggerType == "go_kit_log" {
+				b.method.AddStatement(conditionalLogMessageStatementKitLog(b.methodConfig.MethodName, last.Names[0].Name))
+			} else {
+				b.method.AddStatement(conditionalLogMessageStatementStdLog(b.methodConfig.MethodName, last.Names[0].Name))
+			}
 		}
 	}
 
@@ -229,8 +250,63 @@ func (b *LoggingMethodBuilder) Build() ast.Decl {
 
 	return b.method.Build()
 }
+func conditionalLogMessageStatementStdLog(methodName string, errorResultName string) ast.Stmt {
+	callLogExpr := &ast.CallExpr{
+		Fun: &ast.SelectorExpr{
+			X:   &ast.SelectorExpr{X: ast.NewIdent("m"), Sel: ast.NewIdent("logger")},
+			Sel: ast.NewIdent("Printf"),
+		},
+		Args: []ast.Expr{
+			&ast.BasicLit{Kind: token.STRING, Value: fmt.Sprintf("`method: %s, with err: %s`", methodName, "%s")},
+			&ast.BasicLit{Kind: token.STRING, Value: errorResultName},
+		},
+	}
 
-func conditionalLogMessageStatement(methodName, errorResultName string) ast.Stmt {
+	return &ast.IfStmt{
+		Cond: &ast.BinaryExpr{
+			X:  ast.NewIdent(errorResultName),
+			Op: token.NEQ,
+			Y:  ast.NewIdent("nil"),
+		},
+		Body: &ast.BlockStmt{
+			List: []ast.Stmt{&ast.ExprStmt{X: callLogExpr}},
+		},
+	}
+}
+
+func conditionalLogMessageStatementLogrus(methodName, errorResultName string) ast.Stmt {
+	callLogExpr := &ast.CallExpr{
+		Fun: &ast.SelectorExpr{
+			X: &ast.CallExpr{
+				Fun: &ast.SelectorExpr{
+					X: &ast.SelectorExpr{
+						X:   ast.NewIdent("m"),
+						Sel: ast.NewIdent("logger")},
+					Sel: ast.NewIdent("WithField")},
+				Args: []ast.Expr{
+					&ast.BasicLit{Kind: token.STRING, Value: `"method"`},
+					&ast.BasicLit{Kind: token.STRING, Value: fmt.Sprintf("%q", methodName)},
+				},
+			},
+			Sel: ast.NewIdent("Error"),
+		},
+		Args: []ast.Expr{&ast.BasicLit{Kind: token.STRING, Value: errorResultName},
+		},
+	}
+
+	return &ast.IfStmt{
+		Cond: &ast.BinaryExpr{
+			X:  ast.NewIdent(errorResultName),
+			Op: token.NEQ,
+			Y:  ast.NewIdent("nil"),
+		},
+		Body: &ast.BlockStmt{
+			List: []ast.Stmt{&ast.ExprStmt{X: callLogExpr}},
+		},
+	}
+}
+
+func conditionalLogMessageStatementKitLog(methodName, errorResultName string) ast.Stmt {
 	callLogExpr := &ast.CallExpr{
 		Fun: &ast.SelectorExpr{
 			X:   &ast.SelectorExpr{X: ast.NewIdent("m"), Sel: ast.NewIdent("logger")},

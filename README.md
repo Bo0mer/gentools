@@ -41,8 +41,17 @@ svc = servicemws.NewMonitoringService(svc, totalOps, faildOps, opsDuration)
 
 ## Using logen
 
-Given a path to a package and an interface name, you could generate logging
-implementation of the interface. ATM only error logging is supported.
+Given a path to a package, an interface name and logger _(optional)_, you could generate logging
+implementation of the interface. 
+
+### Supported loggers
+* `go_kit_log` - The logger provided from [go-kit](https://github.com/go-kit/kit)
+* `logrus`  - The logger provided from [logrus](https://github.com/sirupsen/logrus)
+* `stdlog`  - The logger provided from the standard go library logger
+
+If logger is not mentioned, the app will generate its implementation by using the standard go library logger. 
+
+At the moment, only error logging is supported.
 
 ## Using tracegen
 
@@ -67,7 +76,7 @@ import "context"
 
 //go:generate mongen . Service
 //go:generate tracegen . Service
-//go:generate logen . Service
+//go:generate logen . Service stdlog
 
 type Service interface {
 	DoWork(context.Context, int, string) (string, error)
