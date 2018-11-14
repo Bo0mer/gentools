@@ -251,9 +251,13 @@ func NewMethodInvocation(method *astgen.MethodConfig) *MethodInvocation {
 }
 
 func (m *MethodInvocation) Build() ast.Stmt {
-	paramSelectors := []ast.Expr{}
+	var paramSelectors []ast.Expr
+	var ellipsisPos token.Pos
 	for _, param := range m.method.MethodParams {
 		paramSelectors = append(paramSelectors, ast.NewIdent(param.Names[0].String()))
+		if p, ok := param.Type.(*ast.Ellipsis); ok {
+			ellipsisPos = p.Pos()
+		}
 	}
 
 	callExpr := &ast.CallExpr{
@@ -261,7 +265,8 @@ func (m *MethodInvocation) Build() ast.Stmt {
 			X:   m.receiver,
 			Sel: ast.NewIdent(m.method.MethodName),
 		},
-		Args: paramSelectors,
+		Args:     paramSelectors,
+		Ellipsis: ellipsisPos,
 	}
 
 	if m.method.HasResults() {
