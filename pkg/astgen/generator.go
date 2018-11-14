@@ -54,15 +54,19 @@ func (g *Generator) ProcessInterface(d resolution.TypeDiscovery) error {
 		return errors.New(fmt.Sprintf("type '%s' in '%s' is not interface!", d.Spec.Name.String(), d.Location))
 	}
 	for field := range internal.EachFieldInFieldList(iFaceType.Methods) {
+		var err error
 		switch t := field.Type.(type) {
 		case *ast.FuncType:
-			g.processMethod(context, field.Names[0].String(), t)
+			err = g.processMethod(context, field.Names[0].String(), t)
 		case *ast.Ident:
-			g.processSubInterfaceIdent(context, t)
+			err = g.processSubInterfaceIdent(context, t)
 		case *ast.SelectorExpr:
-			g.processSubInterfaceSelector(context, t)
+			err = g.processSubInterfaceSelector(context, t)
 		default:
 			return errors.New("Unknown statement in interface declaration.")
+		}
+		if err != nil {
+			return err
 		}
 	}
 	return nil
