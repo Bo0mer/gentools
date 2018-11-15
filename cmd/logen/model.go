@@ -15,9 +15,10 @@ type model struct {
 	structName  string
 
 	timePackageAlias string
+	loggerType       string
 }
 
-func newModel(interfacePath, interfaceName, structName, targetPkg string) *model {
+func newModel(interfacePath, interfaceName, loggerType, structName, targetPkg string) *model {
 	file := astgen.NewFile(targetPkg)
 	strct := astgen.NewStruct(structName)
 	file.AppendDeclaration(strct)
@@ -25,9 +26,18 @@ func newModel(interfacePath, interfaceName, structName, targetPkg string) *model
 	m := &model{
 		fileBuilder: file,
 		structName:  structName,
+		loggerType:  loggerType,
 	}
 	sourcePackageAlias := m.AddImport("", interfacePath)
-	logPackageAlias := m.AddImport("", "github.com/go-kit/kit/log")
+
+	var logPackageAlias string
+	if loggerType == "logrus" {
+		logPackageAlias = m.AddImport("", "github.com/sirupsen/logrus")
+	} else if loggerType == "go_kit_log" {
+		logPackageAlias = m.AddImport("", "github.com/go-kit/kit/log")
+	} else if loggerType == "stdlog" {
+		logPackageAlias = m.AddImport("", "log")
+	}
 
 	constructorBuilder := newConstructorBuilder(logPackageAlias, sourcePackageAlias, interfaceName)
 	file.AppendDeclaration(constructorBuilder)
@@ -53,7 +63,7 @@ func (m *model) AddImport(pkgName, location string) string {
 }
 
 func (m *model) AddMethod(method *astgen.MethodConfig) error {
-	mmb := NewLoggingMethodBuilder(m.structName, method)
+	mmb := NewLoggingMethodBuilder(m.structName, method, m.loggerType)
 
 	m.fileBuilder.AppendDeclaration(mmb)
 	return nil
