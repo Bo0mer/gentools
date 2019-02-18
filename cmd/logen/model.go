@@ -13,8 +13,9 @@ import (
 type model struct {
 	fileBuilder *astgen.File
 	structName  string
+	strct       *astgen.Struct
 
-	timePackageAlias string
+	contextPackageAlias string
 }
 
 func newModel(interfacePath, interfaceName, structName, targetPkg string) *model {
@@ -25,15 +26,18 @@ func newModel(interfacePath, interfaceName, structName, targetPkg string) *model
 	m := &model{
 		fileBuilder: file,
 		structName:  structName,
+		strct:       strct,
 	}
 	sourcePackageAlias := m.AddImport("", interfacePath)
 	logPackageAlias := m.AddImport("", "github.com/go-kit/kit/log")
+	m.contextPackageAlias = m.AddImport("", "context")
 
-	constructorBuilder := newConstructorBuilder(logPackageAlias, sourcePackageAlias, interfaceName)
+	constructorBuilder := newConstructorBuilder(logPackageAlias, sourcePackageAlias, interfaceName, m.contextPackageAlias)
 	file.AppendDeclaration(constructorBuilder)
 
 	strct.AddField("next", sourcePackageAlias, interfaceName)
 	strct.AddField("logger", logPackageAlias, "Logger")
+	strct.AddFieldWithType("fields", fieldsFuncType(m.contextPackageAlias))
 
 	return m
 }
@@ -53,7 +57,7 @@ func (m *model) AddImport(pkgName, location string) string {
 }
 
 func (m *model) AddMethod(method *astgen.MethodConfig) error {
-	mmb := NewLoggingMethodBuilder(m.structName, method)
+	mmb := NewLoggingMethodBuilder(m.structName, method, m.contextPackageAlias)
 
 	m.fileBuilder.AppendDeclaration(mmb)
 	return nil
@@ -64,5 +68,26 @@ func (m *model) resolveInterfaceType(location, name string) *ast.SelectorExpr {
 	return &ast.SelectorExpr{
 		X:   ast.NewIdent(alias),
 		Sel: ast.NewIdent(name),
+	}
+}
+
+func fieldsFuncType(contextPackageAlias string) ast.Expr {
+	return &ast.FuncType{
+		Params: &ast.FieldList{List: []*ast.Field{
+			&ast.Field{
+				Names: []*ast.Ident{ast.NewIdent("ctx")},
+				Type: &ast.SelectorExpr{
+					X:   ast.NewIdent(contextPackageAlias),
+					Sel: ast.NewIdent("Context"),
+				},
+			},
+			&ast.Field{
+				Names: []*ast.Ident{ast.NewIdent("err")},
+				Type:  ast.NewIdent("error"),
+			},
+		}},
+		Results: &ast.FieldList{List: []*ast.Field{
+			&ast.Field{Type: ast.NewIdent("[]interface{}")},
+		}},
 	}
 }

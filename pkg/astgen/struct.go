@@ -33,6 +33,16 @@ func (s *Struct) AddField(name, typePackage, typeName string) {
 	)
 }
 
+func (s *Struct) AddFieldWithType(name string, typ ast.Expr) {
+	s.fields = append(s.fields, &ast.Field{
+		Names: []*ast.Ident{
+			ast.NewIdent(name),
+		},
+		Type: typ,
+	},
+	)
+}
+
 func (s *Struct) Build() ast.Decl {
 	return &ast.GenDecl{
 		Tok: token.TYPE,

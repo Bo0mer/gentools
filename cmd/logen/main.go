@@ -102,7 +102,6 @@ func dirToImport(p string) (string, error) {
 	}
 	return pkg.ImportPath, nil
 }
-
 func importToDir(imp string) (string, error) {
 	pkg, err := build.Import(imp, "", build.FindOnly)
 	if err != nil {
@@ -115,23 +114,50 @@ type constructorBuilder struct {
 	logPackageName       string
 	interfacePackageName string
 	interfaceName        string
+	contextPackageName   string
 }
 
-func newConstructorBuilder(logPackageName, packageName, interfaceName string) *constructorBuilder {
+func newConstructorBuilder(logPackageName, packageName, interfaceName, contextPackageName string) *constructorBuilder {
 	return &constructorBuilder{
 		logPackageName:       logPackageName,
 		interfacePackageName: packageName,
 		interfaceName:        interfaceName,
+		contextPackageName:   contextPackageName,
 	}
 }
 
 func (c *constructorBuilder) Build() ast.Decl {
 	funcBody := &ast.BlockStmt{
 		List: []ast.Stmt{
+			&ast.AssignStmt{
+				Lhs: []ast.Expr{ast.NewIdent("f")},
+				Tok: token.DEFINE,
+				Rhs: []ast.Expr{&ast.CompositeLit{
+					Type: fieldsFuncType(c.contextPackageName),
+					Elts: []ast.Expr{ast.NewIdent("return nil")},
+				}},
+			},
+			&ast.IfStmt{
+				Cond: &ast.BinaryExpr{
+					X: &ast.CallExpr{
+						Fun:  ast.NewIdent("len"),
+						Args: []ast.Expr{ast.NewIdent("fields")},
+					},
+					Op: token.GTR,
+					Y:  &ast.BasicLit{Kind: token.INT, Value: "0"},
+				},
+				Body: &ast.BlockStmt{List: []ast.Stmt{
+					&ast.AssignStmt{
+						Lhs: []ast.Expr{ast.NewIdent("f")},
+						Tok: token.ASSIGN,
+						Rhs: []ast.Expr{&ast.IndexExpr{X: ast.NewIdent("fields"), Index: &ast.BasicLit{Kind: token.INT, Value: "0"}}},
+					},
+				}},
+			},
 			&ast.ReturnStmt{
 				Results: []ast.Expr{
 					// TODO(borshukov): Find a better way to do this.
-					ast.NewIdent(fmt.Sprintf("&errorLogging%s{next, logger}", c.interfaceName)),
+					ast.NewIdent(fmt.Sprintf("&errorLogging%s{next: next, logger: logger, fields: f}", c.interfaceName)),
 				},
 			},
 		},
@@ -162,6 +188,10 @@ func (c *constructorBuilder) Build() ast.Decl {
 							Sel: ast.NewIdent("Logger"),
 						},
 					},
+					&ast.Field{
+						Names: []*ast.Ident{ast.NewIdent("fields")},
+						Type:  &ast.Ellipsis{Elt: fieldsFuncType(c.contextPackageName)},
+					},
 				},
 			},
 			Results: &ast.FieldList{
@@ -181,16 +211,18 @@ func (c *constructorBuilder) Build() ast.Decl {
 }
 
 type LoggingMethodBuilder struct {
-	methodConfig *astgen.MethodConfig
-	method       *astgen.Method
+	methodConfig        *astgen.MethodConfig
+	method              *astgen.Method
+	contextPackageAlias string
 }
 
-func NewLoggingMethodBuilder(structName string, methodConfig *astgen.MethodConfig) *LoggingMethodBuilder {
+func NewLoggingMethodBuilder(structName string, methodConfig *astgen.MethodConfig, contextPackageAlias string) *LoggingMethodBuilder {
 	method := astgen.NewMethod(methodConfig.MethodName, "m", structName)
 
 	return &LoggingMethodBuilder{
-		methodConfig: methodConfig,
-		method:       method,
+		methodConfig:        methodConfig,
+		method:              method,
+		contextPackageAlias: contextPackageAlias,
 	}
 }
 func (b *LoggingMethodBuilder) Build() ast.Decl {
@@ -213,12 +245,12 @@ func (b *LoggingMethodBuilder) Build() ast.Decl {
 	b.method.AddStatement(methodInvocation.Build())
 
 	// Log if an error has occurred.
-	//   if err != nil { m.logger.Log("message", err.Error()) }
 	n := len(b.methodConfig.MethodResults)
 	if n > 0 {
 		last := b.methodConfig.MethodResults[n-1]
 		if id, ok := last.Type.(*ast.Ident); ok && id.Name == "error" {
-			b.method.AddStatement(conditionalLogMessageStatement(b.methodConfig.MethodName, last.Names[0].Name))
+			s := b.conditionalLogMessageStatement(b.methodConfig.MethodName, last.Names[0].Name)
+			b.method.AddStatement(s)
 		}
 	}
 
@@ -230,22 +262,104 @@ func (b *LoggingMethodBuilder) Build() ast.Decl {
 	return b.method.Build()
 }
 
-func conditionalLogMessageStatement(methodName, errorResultName string) ast.Stmt {
+func (b *LoggingMethodBuilder) contextArgName() (string, bool) {
+	if len(b.methodConfig.MethodParams) == 0 {
+		return "", false
+	}
+
+	p1 := b.methodConfig.MethodParams[0]
+	if sel, ok := p1.Type.(*ast.SelectorExpr); ok {
+		if sel.Sel.String() == "Context" {
+			if id, ok := sel.X.(*ast.Ident); ok && id.String() == b.contextPackageAlias {
+				return p1.Names[0].Name, true
+			}
+		}
+	}
+
+	return "", false
+}
+
+func (b *LoggingMethodBuilder) conditionalLogMessageStatement(methodName, errorResultName string) ast.Stmt {
+	// If the first parameter is context.Context, get additional log
+	// fields.
+	var additionalFieldsStmt ast.Stmt = &ast.EmptyStmt{}
+	var appendAdditionalFieldsStmt ast.Stmt = &ast.EmptyStmt{}
+	if ctxArgName, ok := b.contextArgName(); ok {
+		callExpr := &ast.CallExpr{
+			Fun: &ast.SelectorExpr{
+				X:   ast.NewIdent("m"), // receiver name
+				Sel: ast.NewIdent("fields"),
+			},
+			Args: []ast.Expr{ast.NewIdent(ctxArgName), ast.NewIdent(errorResultName)},
+		}
+
+		additionalFieldsStmt = &ast.AssignStmt{
+			Lhs: []ast.Expr{ast.NewIdent("_more")},
+			Tok: token.DEFINE,
+			Rhs: []ast.Expr{
+				callExpr,
+			},
+		}
+
+		// if len(_more) > 0 {
+
+		appendAdditionalFieldsStmt = &ast.IfStmt{
+			Cond: &ast.BinaryExpr{
+				X: &ast.CallExpr{
+					Fun:  ast.NewIdent("len"),
+					Args: []ast.Expr{ast.NewIdent("_more")},
+				},
+				Op: token.GTR,
+				Y:  ast.NewIdent("0"),
+			},
+			Body: &ast.BlockStmt{
+				List: []ast.Stmt{
+					// _fields = append(_fields, _more...)
+					&ast.AssignStmt{
+						Lhs: []ast.Expr{ast.NewIdent("_fields")},
+						Tok: token.ASSIGN,
+						Rhs: []ast.Expr{
+							&ast.CallExpr{
+								Fun:  ast.NewIdent("append"),
+								Args: []ast.Expr{ast.NewIdent("_fields"), ast.NewIdent("_more...")},
+							},
+						},
+					},
+				},
+			},
+		}
+	}
+
+	assignStmt := &ast.AssignStmt{
+		Lhs: []ast.Expr{ast.NewIdent("_fields")},
+		Tok: token.DEFINE,
+		Rhs: []ast.Expr{
+			&ast.CompositeLit{
+				Type: &ast.ArrayType{
+					Elt: ast.NewIdent("interface{}"),
+				},
+				Elts: []ast.Expr{
+					&ast.BasicLit{Kind: token.STRING, Value: `"method"`},
+					&ast.BasicLit{Kind: token.STRING, Value: fmt.Sprintf("%q", methodName)},
+					&ast.BasicLit{Kind: token.STRING, Value: `"error"`},
+					&ast.CallExpr{
+						Fun: &ast.SelectorExpr{
+							X:   ast.NewIdent(errorResultName),
+							Sel: ast.NewIdent("Error"),
+						},
+					},
+				},
+			},
+		},
+	}
+
 	callLogExpr := &ast.CallExpr{
 		Fun: &ast.SelectorExpr{
 			X:   &ast.SelectorExpr{X: ast.NewIdent("m"), Sel: ast.NewIdent("logger")},
 			Sel: ast.NewIdent("Log"),
 		},
 		Args: []ast.Expr{
-			&ast.BasicLit{Kind: token.STRING, Value: `"method"`},
-			&ast.BasicLit{Kind: token.STRING, Value: fmt.Sprintf("%q", methodName)},
-			&ast.BasicLit{Kind: token.STRING, Value: `"error"`},
-			&ast.CallExpr{
-				Fun: &ast.SelectorExpr{
-					X:   ast.NewIdent(errorResultName),
-					Sel: ast.NewIdent("Error"),
-				},
-			},
+			ast.NewIdent("_fields..."),
 		},
 	}
 
@@ -256,7 +370,11 @@ func conditionalLogMessageStatement(methodName, errorResultName string) ast.Stmt
 			Y:  ast.NewIdent("nil"),
 		},
 		Body: &ast.BlockStmt{
-			List: []ast.Stmt{&ast.ExprStmt{X: callLogExpr}},
+			List: []ast.Stmt{
+				assignStmt,
+				additionalFieldsStmt,
+				appendAdditionalFieldsStmt,
+				&ast.ExprStmt{X: callLogExpr}},
 		},
 	}
 }
