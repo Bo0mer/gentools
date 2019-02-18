@@ -350,58 +350,6 @@ func (r *startTimeRecorder) Build() ast.Stmt {
 	}
 }
 
-type RecordOpDuration struct {
-	timePackageAlias string
-	opsDuration      *ast.SelectorExpr
-	operationName    string
-}
-
-func NewRecordOpDuraton(timePackageAlias string, opsDuration *ast.SelectorExpr, operationName string) *RecordOpDuration {
-	return &RecordOpDuration{
-		timePackageAlias: timePackageAlias,
-		opsDuration:      opsDuration,
-		operationName:    operationName,
-	}
-}
-
-func (r *RecordOpDuration) Build() ast.Stmt {
-	timeSinceCallExpr := &ast.CallExpr{
-		Fun: &ast.SelectorExpr{
-			X:   ast.NewIdent(r.timePackageAlias),
-			Sel: ast.NewIdent("Since"),
-		},
-		Args: []ast.Expr{ast.NewIdent("_start")},
-	}
-
-	durationSecondsExpr := &ast.CallExpr{
-		Fun: &ast.SelectorExpr{
-			X:   timeSinceCallExpr,
-			Sel: ast.NewIdent("Seconds"),
-		},
-	}
-
-	callWithExpr := &ast.CallExpr{
-		Fun: &ast.SelectorExpr{
-			X:   r.opsDuration,
-			Sel: ast.NewIdent("With"),
-		},
-		Args: []ast.Expr{
-			&ast.BasicLit{Kind: token.STRING, Value: `"operation"`},
-			&ast.BasicLit{Kind: token.STRING, Value: fmt.Sprintf(`"%s"`, toSnakeCase(r.operationName))},
-		},
-	}
-
-	observeCallExpr := &ast.CallExpr{
-		Fun: &ast.SelectorExpr{
-			X:   callWithExpr,
-			Sel: ast.NewIdent("Observe"),
-		},
-		Args: []ast.Expr{durationSecondsExpr},
-	}
-
-	return &ast.ExprStmt{X: observeCallExpr}
-}
-
 func toSnakeCase(in string) string {
 	runes := []rune(in)
 
