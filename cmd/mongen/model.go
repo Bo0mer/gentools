@@ -15,9 +15,6 @@ type model struct {
 	structName  string
 
 	timePackageAlias string
-	totalOps         *ast.SelectorExpr
-	failedOps        *ast.SelectorExpr
-	opsDuration      *ast.SelectorExpr
 }
 
 func newModel(interfacePath, interfaceName, structName, targetPkg string) *model {

@@ -55,7 +55,7 @@ func main() {
 
 	typeName := fmt.Sprintf("monitoring%s", interfaceName)
 
-	model := newModel(sourcePkgPath, interfaceName, typeName, targetPkg)
+	model := newOcModel(sourcePkgPath, interfaceName, typeName, targetPkg)
 	generator := astgen.Generator{
 		Model:    model,
 		Locator:  locator,
@@ -435,13 +435,14 @@ func (r *ReturnResults) Build() ast.Stmt {
 
 type startTimeRecorder struct {
 	timePackageAlias string
+	startFieldName   string
 }
 
 func RecordStartTime(timePackageAlias string) *startTimeRecorder {
-	return &startTimeRecorder{timePackageAlias}
+	return &startTimeRecorder{timePackageAlias: timePackageAlias}
 }
 
-func (r *startTimeRecorder) Build() ast.Stmt {
+func (r startTimeRecorder) Build() ast.Stmt {
 	callExpr := &ast.CallExpr{
 		Fun: &ast.SelectorExpr{
 			X:   ast.NewIdent(r.timePackageAlias),
@@ -449,8 +450,12 @@ func (r *startTimeRecorder) Build() ast.Stmt {
 		},
 	}
 
+	startFieldName := r.startFieldName
+	if startFieldName == "" {
+		startFieldName = "_start"
+	}
 	return &ast.AssignStmt{
-		Lhs: []ast.Expr{ast.NewIdent("_start")},
+		Lhs: []ast.Expr{ast.NewIdent(startFieldName)},
 		Tok: token.DEFINE,
 		Rhs: []ast.Expr{
 			callExpr,
@@ -472,7 +477,7 @@ func NewRecordOpDuraton(timePackageAlias string, opsDuration *ast.SelectorExpr, 
 	}
 }
 
-func (r *RecordOpDuration) Build() ast.Stmt {
+func (r RecordOpDuration) Build() ast.Stmt {
 	timeSinceCallExpr := &ast.CallExpr{
 		Fun: &ast.SelectorExpr{
 			X:   ast.NewIdent(r.timePackageAlias),
