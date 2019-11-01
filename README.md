@@ -30,6 +30,15 @@ $ mongen path/to/service Service
 Wrote monitoring implementation of "path/to/service.Service" to "path/to/service/servicews/monitoring_service.go"
 ```
 
+By default the generated implementation uses [go-kit metrics](https://github.com/go-kit/kit/tree/master/metrics). You
+can change it to [opensensus](https://github.com/census-instrumentation/opencensus-go) by providing it as a 3rd argument
+like this:
+
+```bash
+$ mongen path/to/service Service opensensus
+Wrote monitoring implementation of "path/to/service.Service" to "path/to/service/servicews/monitoring_service.go"
+```
+
 ### Using monitoring implementation in your program
 
 Instantiate monitoring implementations with `NewMonitoring{InterfaceName}`:
