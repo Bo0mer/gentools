@@ -14,6 +14,7 @@ type packageAliases struct {
 	statsPkg   string
 	timePkg    string
 	contextPkg string
+	tagPkg     string
 }
 
 type opencensusModel struct {
@@ -34,6 +35,7 @@ func newOpencensusModel(interfacePath, interfaceName, structName, targetPkg stri
 	m.packageAliases = packageAliases{}
 	m.packageAliases.contextPkg = m.AddImport("", "context")
 	m.packageAliases.statsPkg = m.AddImport("", "go.opencensus.io/stats")
+	m.packageAliases.tagPkg = m.AddImport("", "go.opencensus.io/tag")
 	m.packageAliases.timePkg = m.AddImport("", "time")
 	sourcePackageAlias := m.AddImport("", interfacePath)
 

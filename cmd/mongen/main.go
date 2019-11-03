@@ -18,8 +18,10 @@ import (
 
 const (
 	goKitProvider      = "go-kit"
-	opensensusProvider = "opensensus"
+	opencensusProvider = "opencensus"
 )
+
+var supportedProviders = []string{goKitProvider, opencensusProvider}
 
 type args struct {
 	sourceDir          string
@@ -28,7 +30,7 @@ type args struct {
 }
 
 func isValidProvider(provider string) bool {
-	return provider == goKitProvider || provider == opensensusProvider
+	return provider == goKitProvider || provider == opencensusProvider
 }
 
 func parseArgs() (args, error) {
@@ -147,7 +149,7 @@ func newModel(provider string, interfacePath, interfaceName, structName, targetP
 	switch provider {
 	case goKitProvider:
 		return newGoKitModel(interfacePath, interfaceName, structName, targetPkg), nil
-	case opensensusProvider:
+	case opencensusProvider:
 		return newOpencensusModel(interfacePath, interfaceName, structName, targetPkg), nil
 	}
 	return nil, fmt.Errorf("unknown provider: %s", provider)

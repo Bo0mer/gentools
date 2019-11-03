@@ -22,7 +22,7 @@ func newOCConstructorBuilder(metricsPackageName, packageName, interfaceName stri
 	}
 }
 
-// Build builds the constructor method for given monitoring wrapper service using opensensus metrics.
+// Build builds the constructor method for given monitoring wrapper service using opencensus metrics.
 func (c *ocConstructorBuilder) Build() ast.Decl {
 	funcBody := &ast.BlockStmt{
 		List: []ast.Stmt{
@@ -150,10 +150,10 @@ func (b *OCMonitoringMethodBuilder) Build() ast.Decl {
 
 	const (
 		startFieldName = "start"
+		tagKeyVarName  = "tagKey"
 		ctxFieldName   = "ctx"
 	)
 
-	// TODO - do we want to enrich the context with tags? They seem similar to go-kit's labels
 	// Add ctx initialization. Can be either
 	//   ctx := [contextPkg].Background()
 	// or
@@ -164,6 +164,28 @@ func (b *OCMonitoringMethodBuilder) Build() ast.Decl {
 		methodConfig:    b.methodConfig,
 	}
 	b.method.AddStatement(initContextVar.Build())
+
+	snakeCaseMethodName := toSnakeCase(b.methodConfig.MethodName)
+
+	// Create an opencensus tag
+	//   tagKey, _ := tag.NewKey("operation")
+	createTagKey := &CreateTagKey{
+		ctxFieldName:      ctxFieldName,
+		tagPackageAlias:   b.packageAliases.tagPkg,
+		tagKeyVarName:     tagKeyVarName,
+		wrappedMethodName: snakeCaseMethodName,
+	}
+	b.method.AddStatement(createTagKey.Build())
+
+	//  Insert the tag in to context
+	//   ctx, _ = tag.New(ctx, tag.Insert(tagKey, toSnakeCase(c.operationName)))
+	insertInContext := InsertTagInContext{
+		ctxFieldName:      ctxFieldName,
+		tagPackageAlias:   b.packageAliases.tagPkg,
+		tagKeyVarName:     tagKeyVarName,
+		wrappedMethodName: snakeCaseMethodName,
+	}
+	b.method.AddStatement(insertInContext.Build())
 
 	// Add increase total operations statement
 	// 	 stats.Record(ctx, m.totalOps.M(1))
@@ -189,10 +211,6 @@ func (b *OCMonitoringMethodBuilder) Build() ast.Decl {
 		Sel: ast.NewIdent("next"),
 	})
 	b.method.AddStatement(methodInvocation.Build())
-
-	// Record operation duration
-	//   m.opsDuration.Observe(time.Since(start))
-	//b.method.AddStatement(NewRecordOpDuraton(b.timePackageAlias, b.opsDuration, b.methodConfig.MethodName).Build())
 
 	// Record operation duration
 	//   stats.Record(ctx, m.opsDuration.M(time.Since(start).Seconds()))
@@ -261,6 +279,84 @@ func (c ContextParam) Build() ast.Stmt {
 		Lhs: lhs,
 		Tok: token.DEFINE,
 		Rhs: rhs,
+	}
+}
+
+type CreateTagKey struct {
+	ctxFieldName      string
+	tagPackageAlias   string
+	tagKeyVarName     string
+	wrappedMethodName string
+}
+
+// Build builds a opencensus tag key.
+//   tagKey, _ := tag.NewKey("operation")
+func (t CreateTagKey) Build() ast.Stmt {
+	// tagKey, _ :=
+	return &ast.AssignStmt{
+		Lhs: []ast.Expr{
+			ast.NewIdent(t.tagKeyVarName),
+			ast.NewIdent("_"),
+		},
+		Tok: token.DEFINE,
+		// ... tag.NewKey("operation")
+		Rhs: []ast.Expr{
+			&ast.CallExpr{
+				Fun: &ast.SelectorExpr{
+					X:   ast.NewIdent(t.tagPackageAlias),
+					Sel: ast.NewIdent("NewKey"),
+				},
+				Args: []ast.Expr{
+					&ast.BasicLit{Kind: token.STRING, Value: `"operation"`},
+				},
+			},
+		},
+	}
+}
+
+type InsertTagInContext struct {
+	ctxFieldName      string
+	tagPackageAlias   string
+	tagKeyVarName     string
+	wrappedMethodName string
+}
+
+// Build creats a new context and adds to it the tag key with the method name as a value.
+//   ctx, _ = tag.New(ctx, tag.Insert(tagKey, [t.wrapped_method_name]))
+func (t InsertTagInContext) Build() ast.Stmt {
+	// tag.Insert(tagKey, [t.wrapped_method_name])
+	insertKey := &ast.CallExpr{
+		Fun: &ast.SelectorExpr{
+			X:   ast.NewIdent(t.tagPackageAlias),
+			Sel: ast.NewIdent("Insert"),
+		},
+		Args: []ast.Expr{
+			ast.NewIdent(t.tagKeyVarName),
+			&ast.BasicLit{Kind: token.STRING, Value: fmt.Sprintf(`"%s"`, t.wrappedMethodName)},
+		},
+	}
+
+	// ctx, _ = ...
+	return &ast.AssignStmt{
+		Lhs: []ast.Expr{
+			ast.NewIdent(t.ctxFieldName),
+			ast.NewIdent("_"),
+		},
+		Tok: token.ASSIGN,
+		Rhs: []ast.Expr{
+			&ast.CallExpr{
+				// ... tag.New(...
+				Fun: &ast.SelectorExpr{
+					X:   ast.NewIdent(t.tagPackageAlias),
+					Sel: ast.NewIdent("New"),
+				},
+				/// ... ctx, [tagInsertFuncCall])
+				Args: []ast.Expr{
+					ast.NewIdent(t.ctxFieldName),
+					insertKey,
+				},
+			},
+		},
 	}
 }
 
