@@ -42,6 +42,28 @@ func (c *ocConstructorBuilder) Build() ast.Decl {
 		},
 	}
 
+	funcParamExpr := func(name, pkg, pkgSel string, asPointer bool) *ast.Field {
+		if asPointer {
+			return &ast.Field{
+				Names: []*ast.Ident{ast.NewIdent(name)},
+				Type: &ast.StarExpr{
+					X: &ast.SelectorExpr{
+						X:   ast.NewIdent(pkg),
+						Sel: ast.NewIdent(pkgSel),
+					},
+				},
+			}
+		} else {
+			return &ast.Field{
+				Names: []*ast.Ident{ast.NewIdent(name)},
+				Type: &ast.SelectorExpr{
+					X:   ast.NewIdent(pkg),
+					Sel: ast.NewIdent(pkgSel),
+				},
+			}
+		}
+	}
+
 	funcName := fmt.Sprintf("NewMonitoring%s", c.interfaceName)
 	return &ast.FuncDecl{
 		Doc: &ast.CommentGroup{
@@ -53,34 +75,10 @@ func (c *ocConstructorBuilder) Build() ast.Decl {
 		Type: &ast.FuncType{
 			Params: &ast.FieldList{
 				List: []*ast.Field{
-					{
-						Names: []*ast.Ident{ast.NewIdent("next")},
-						Type: &ast.SelectorExpr{
-							X:   ast.NewIdent(c.interfacePackageName),
-							Sel: ast.NewIdent(c.interfaceName),
-						},
-					},
-					{
-						Names: []*ast.Ident{ast.NewIdent(totalOps)},
-						Type: &ast.SelectorExpr{
-							X:   ast.NewIdent(c.metricsPackageName),
-							Sel: ast.NewIdent("Int64Measure"),
-						},
-					},
-					{
-						Names: []*ast.Ident{ast.NewIdent(failedOps)},
-						Type: &ast.SelectorExpr{
-							X:   ast.NewIdent(c.metricsPackageName),
-							Sel: ast.NewIdent("Int64Measure"),
-						},
-					},
-					{
-						Names: []*ast.Ident{ast.NewIdent(opsDuration)},
-						Type: &ast.SelectorExpr{
-							X:   ast.NewIdent(c.metricsPackageName),
-							Sel: ast.NewIdent("Float64Measure"),
-						},
-					},
+					funcParamExpr("next", c.interfacePackageName, c.interfaceName, false),
+					funcParamExpr(totalOps, c.metricsPackageName, "Int64Measure", true),
+					funcParamExpr(failedOps, c.metricsPackageName, "Int64Measure", true),
+					funcParamExpr(opsDuration, c.metricsPackageName, "Float64Measure", true),
 				},
 			},
 			Results: &ast.FieldList{
