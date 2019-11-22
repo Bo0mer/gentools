@@ -9,19 +9,23 @@ import (
 	alias4 "time"
 )
 
-type monitoringServiceMixedCtxMultiMethod struct {
-	next        alias5.ServiceMixedCtxMultiMethod
+type monitoringOCService struct {
+	next        alias5.OCService
 	totalOps    *alias2.Int64Measure
 	failedOps   *alias2.Int64Measure
 	opsDuration *alias2.Float64Measure
+	ctxFunc     func(alias1.Context) alias1.Context
 }
 
-// NewMonitoringServiceMixedCtxMultiMethod creates new monitoring middleware.
-func NewMonitoringServiceMixedCtxMultiMethod(next alias5.ServiceMixedCtxMultiMethod, totalOps *alias2.Int64Measure, failedOps *alias2.Int64Measure, opsDuration *alias2.Float64Measure) alias5.ServiceMixedCtxMultiMethod {
-	return &monitoringServiceMixedCtxMultiMethod{next, totalOps, failedOps, opsDuration}
+// NewMonitoringOCService creates new monitoring middleware.
+func NewMonitoringOCService(next alias5.OCService, totalOps *alias2.Int64Measure, failedOps *alias2.Int64Measure, opsDuration *alias2.Float64Measure, ctxFunc func(alias1.Context) alias1.Context) alias5.OCService {
+	return &monitoringOCService{next, totalOps, failedOps, opsDuration, ctxFunc}
 }
-func (m *monitoringServiceMixedCtxMultiMethod) DoWork(arg1 int, arg2 string) (string, error) {
+func (m *monitoringOCService) DoWork(arg1 int, arg2 string) (string, error) {
 	ctx := alias1.Background()
+	if m.ctxFunc != nil {
+		ctx = m.ctxFunc(ctx)
+	}
 	tagKey, _ := alias3.NewKey("operation")
 	ctx, _ = alias3.New(ctx, alias3.Insert(tagKey, "do_work"))
 	alias2.Record(ctx, m.totalOps.M(1))
@@ -33,8 +37,11 @@ func (m *monitoringServiceMixedCtxMultiMethod) DoWork(arg1 int, arg2 string) (st
 	}
 	return result1, result2
 }
-func (m *monitoringServiceMixedCtxMultiMethod) DoWorkCtx(arg1 alias1.Context, arg2 int, arg3 string) (string, error) {
+func (m *monitoringOCService) DoWorkCtx(arg1 alias1.Context, arg2 int, arg3 string) (string, error) {
 	ctx := arg1
+	if m.ctxFunc != nil {
+		ctx = m.ctxFunc(ctx)
+	}
 	tagKey, _ := alias3.NewKey("operation")
 	ctx, _ = alias3.New(ctx, alias3.Insert(tagKey, "do_work_ctx"))
 	alias2.Record(ctx, m.totalOps.M(1))

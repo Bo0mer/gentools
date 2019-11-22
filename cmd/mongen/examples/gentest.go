@@ -2,19 +2,15 @@ package examples
 
 import "context"
 
-//go:generate mongen . ServiceCtx
-//go:generate mongen . ServiceNoCtx
-//go:generate mongen . ServiceMixedCtxMultiMethod opencensus
+//go:generate mongen . GoKitService go-kit
+//go:generate mongen . OCService opencensus
 
-type ServiceCtx interface {
-	DoWork(context.Context, int, string) (string, error)
-}
-
-type ServiceNoCtx interface {
+type GoKitService interface {
 	DoWork(int, string) (string, error)
+	DoWorkCtx(context.Context, int, string) (string, error)
 }
 
-type ServiceMixedCtxMultiMethod interface {
+type OCService interface {
 	DoWork(int, string) (string, error)
 	DoWorkCtx(context.Context, int, string) (string, error)
 }
