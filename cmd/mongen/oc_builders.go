@@ -186,7 +186,7 @@ func (b *OCMonitoringMethodBuilder) Build() ast.Decl {
 
 	snakeCaseMethodName := toSnakeCase(b.methodConfig.MethodName)
 	// Create an opencensus tag
-	//   tagKey, _ := tag.NewKey("operation")
+	//   tagKey, _ := tag.MustNewKey("operation")
 	createTagKey := &CreateTagKey{
 		ctxFieldName:      ctxFieldName,
 		tagPackageAlias:   b.packageAliases.tagPkg,
@@ -196,14 +196,18 @@ func (b *OCMonitoringMethodBuilder) Build() ast.Decl {
 	b.method.AddStatement(createTagKey.Build())
 
 	//  Insert the tag in to context
-	//   ctx, _ = tag.New(ctx, tag.Insert(tagKey, toSnakeCase(c.operationName)))
+	//   var err error
+	//   ctx, err = tag.New(ctx, tag.Insert(tagKey, toSnakeCase(c.operationName)))
+	//   if err != nil {
+	//     panic(err)
+	//   }
 	insertInContext := InsertTagInContext{
 		ctxFieldName:      ctxFieldName,
 		tagPackageAlias:   b.packageAliases.tagPkg,
 		tagKeyVarName:     tagKeyVarName,
 		wrappedMethodName: snakeCaseMethodName,
 	}
-	b.method.AddStatement(insertInContext.Build())
+	b.method.AddStatements(insertInContext.Build())
 
 	// Add increase total operations statement
 	// 	 stats.Record(ctx, m.totalOps.M(1))
@@ -352,7 +356,6 @@ func (t CreateTagKey) Build() ast.Stmt {
 	return &ast.AssignStmt{
 		Lhs: []ast.Expr{
 			ast.NewIdent(t.tagKeyVarName),
-			ast.NewIdent("_"),
 		},
 		Tok: token.DEFINE,
 		// ... tag.NewKey("operation")
@@ -360,7 +363,7 @@ func (t CreateTagKey) Build() ast.Stmt {
 			&ast.CallExpr{
 				Fun: &ast.SelectorExpr{
 					X:   ast.NewIdent(t.tagPackageAlias),
-					Sel: ast.NewIdent("NewKey"),
+					Sel: ast.NewIdent("MustNewKey"),
 				},
 				Args: []ast.Expr{
 					&ast.BasicLit{Kind: token.STRING, Value: `"operation"`},
@@ -377,9 +380,69 @@ type InsertTagInContext struct {
 	wrappedMethodName string
 }
 
-// Build creats a new context and adds to it the tag key with the method name as a value.
-//   ctx, _ = tag.New(ctx, tag.Insert(tagKey, [t.wrapped_method_name]))
-func (t InsertTagInContext) Build() ast.Stmt {
+// Build creates a new context and adds to it the tag key with the method name as a value.
+//   var err error
+//   ctx, _ = tag.New(ctx, tag.Insert(tagKey, toSnakeCase([t.wrapped_method_name])))
+//   if err != nil {
+//     panic(err)
+//   }
+func (t InsertTagInContext) Build() []ast.Stmt {
+	var stmts []ast.Stmt
+
+	errSel := ast.NewIdent("err")
+	newTagStmt := t.buildNewTagStmt(errSel)
+
+	stmts = append(stmts, t.buildVarErrStmt(errSel))
+	stmts = append(stmts, t.buildIfErrThenPanicStmt(newTagStmt, errSel))
+
+	return stmts
+}
+
+// buildVarErrStmt builds the `var err error` statement
+func (t InsertTagInContext) buildVarErrStmt(errSel *ast.Ident) ast.Stmt {
+	return &ast.DeclStmt{
+		Decl: &ast.GenDecl{
+			Tok: token.VAR,
+			Specs: []ast.Spec{
+				&ast.TypeSpec{
+					Name: errSel,
+					Type: ast.NewIdent("error"),
+				},
+			},
+		},
+	}
+}
+
+// buildIfErrThenPanicStmt builds the if statement with the error check and panic if it's not nil
+//   if [initStmt]; [errSel] != nil {
+//     panic([errSel])
+//   }
+func (t InsertTagInContext) buildIfErrThenPanicStmt(initStmt ast.Stmt, errSel ast.Expr) ast.Stmt {
+	panicCallExpr := &ast.CallExpr{
+		Fun:  ast.NewIdent("panic"),
+		Args: []ast.Expr{errSel},
+	}
+
+	return &ast.IfStmt{
+		Init: initStmt,
+		Cond: &ast.BinaryExpr{
+			X:  errSel,
+			Op: token.NEQ,
+			Y:  ast.NewIdent("nil"),
+		},
+		Body: &ast.BlockStmt{
+			List: []ast.Stmt{
+				&ast.ExprStmt{
+					X: panicCallExpr,
+				},
+			},
+		},
+	}
+}
+
+// buildNewTagStmt builds the creation of the new tag and the assignment to the result variables.
+//   [t.ctxFieldName], [errSel] = tag.Insert(tagKey, [t.wrapped_method_name])
+func (t InsertTagInContext) buildNewTagStmt(errSel ast.Expr) ast.Stmt {
 	// tag.Insert(tagKey, [t.wrapped_method_name])
 	insertKey := &ast.CallExpr{
 		Fun: &ast.SelectorExpr{
@@ -392,11 +455,10 @@ func (t InsertTagInContext) Build() ast.Stmt {
 		},
 	}
 
-	// ctx, _ = ...
 	return &ast.AssignStmt{
 		Lhs: []ast.Expr{
 			ast.NewIdent(t.ctxFieldName),
-			ast.NewIdent("_"),
+			errSel,
 		},
 		Tok: token.ASSIGN,
 		Rhs: []ast.Expr{

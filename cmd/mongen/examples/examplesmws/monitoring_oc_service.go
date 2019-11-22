@@ -26,8 +26,11 @@ func (m *monitoringOCService) DoWork(arg1 int, arg2 string) (string, error) {
 	if m.ctxFunc != nil {
 		ctx = m.ctxFunc(ctx)
 	}
-	tagKey, _ := alias3.NewKey("operation")
-	ctx, _ = alias3.New(ctx, alias3.Insert(tagKey, "do_work"))
+	tagKey := alias3.MustNewKey("operation")
+	var err error
+	if ctx, err = alias3.New(ctx, alias3.Insert(tagKey, "do_work")); err != nil {
+		panic(err)
+	}
 	alias2.Record(ctx, m.totalOps.M(1))
 	start := alias4.Now()
 	result1, result2 := m.next.DoWork(arg1, arg2)
@@ -42,8 +45,11 @@ func (m *monitoringOCService) DoWorkCtx(arg1 alias1.Context, arg2 int, arg3 stri
 	if m.ctxFunc != nil {
 		ctx = m.ctxFunc(ctx)
 	}
-	tagKey, _ := alias3.NewKey("operation")
-	ctx, _ = alias3.New(ctx, alias3.Insert(tagKey, "do_work_ctx"))
+	tagKey := alias3.MustNewKey("operation")
+	var err error
+	if ctx, err = alias3.New(ctx, alias3.Insert(tagKey, "do_work_ctx")); err != nil {
+		panic(err)
+	}
 	alias2.Record(ctx, m.totalOps.M(1))
 	start := alias4.Now()
 	result1, result2 := m.next.DoWorkCtx(arg1, arg2, arg3)
