@@ -137,10 +137,6 @@ func dirToImport(p string) (string, error) {
 	return pkg.ImportPath, nil
 }
 
-type sourceWriter interface {
-	WriteSource(w io.Writer) error
-}
-
 type astFileBuilder interface {
 	Build() *ast.File
 }

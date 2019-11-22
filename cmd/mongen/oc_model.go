@@ -38,13 +38,14 @@ func newOpencensusModel(interfacePath, interfaceName, structName, targetPkg stri
 
 	strct := astgen.NewStruct(structName)
 	strct.AddField("next", sourcePackageAlias, interfaceName)
-	// FIXME use strct.AddFieldWithType instead
-	strct.AddField(totalOps, "*"+m.packageAliases.statsPkg, "Int64Measure")
-	strct.AddField(failedOps, "*"+m.packageAliases.statsPkg, "Int64Measure")
-	strct.AddField(opsDuration, "*"+m.packageAliases.statsPkg, "Float64Measure")
+	strct.AddFieldWithType(totalOps, pointerExpr(m.packageAliases.statsPkg, "Int64Measure"))
+	strct.AddFieldWithType(failedOps, pointerExpr(m.packageAliases.statsPkg, "Int64Measure"))
+	strct.AddFieldWithType(opsDuration, pointerExpr(m.packageAliases.statsPkg, "Float64Measure"))
+	strct.AddFieldWithType(ctxFuncName, buildCtxFuncType(m.packageAliases.contextPkg))
 	file.AppendDeclaration(strct)
 
-	constructorBuilder := newOCConstructorBuilder(m.packageAliases.statsPkg, sourcePackageAlias, interfaceName)
+	constructorBuilder := newOCConstructorBuilder(
+		m.packageAliases.statsPkg, m.packageAliases.contextPkg, sourcePackageAlias, interfaceName)
 	file.AppendDeclaration(constructorBuilder)
 
 	return m

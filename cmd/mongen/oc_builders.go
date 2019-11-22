@@ -10,13 +10,16 @@ import (
 
 type ocConstructorBuilder struct {
 	metricsPackageName   string
+	contextPackageName   string
 	interfacePackageName string
 	interfaceName        string
 }
 
-func newOCConstructorBuilder(metricsPackageName, packageName, interfaceName string) *ocConstructorBuilder {
+func newOCConstructorBuilder(
+	metricsPackageName, contextPackageName, packageName, interfaceName string) *ocConstructorBuilder {
 	return &ocConstructorBuilder{
 		metricsPackageName:   metricsPackageName,
+		contextPackageName:   contextPackageName,
 		interfacePackageName: packageName,
 		interfaceName:        interfaceName,
 	}
@@ -35,6 +38,7 @@ func (c *ocConstructorBuilder) Build() ast.Decl {
 							ast.NewIdent(totalOps),
 							ast.NewIdent(failedOps),
 							ast.NewIdent(opsDuration),
+							ast.NewIdent(ctxFuncName),
 						},
 					},
 				},
@@ -46,30 +50,33 @@ func (c *ocConstructorBuilder) Build() ast.Decl {
 		if asPointer {
 			return &ast.Field{
 				Names: []*ast.Ident{ast.NewIdent(name)},
-				Type: &ast.StarExpr{
-					X: &ast.SelectorExpr{
-						X:   ast.NewIdent(pkg),
-						Sel: ast.NewIdent(pkgSel),
-					},
-				},
+				Type:  pointerExpr(pkg, pkgSel),
 			}
-		} else {
-			return &ast.Field{
-				Names: []*ast.Ident{ast.NewIdent(name)},
-				Type: &ast.SelectorExpr{
-					X:   ast.NewIdent(pkg),
-					Sel: ast.NewIdent(pkgSel),
-				},
-			}
+		}
+		return &ast.Field{
+			Names: []*ast.Ident{ast.NewIdent(name)},
+			Type: &ast.SelectorExpr{
+				X:   ast.NewIdent(pkg),
+				Sel: ast.NewIdent(pkgSel),
+			},
+		}
+	}
+
+	buildCtxFuncParam := func(fieldName string) *ast.Field {
+		return &ast.Field{
+			Names: []*ast.Ident{ast.NewIdent(fieldName)},
+			Type:  buildCtxFuncType(c.contextPackageName),
 		}
 	}
 
 	funcName := fmt.Sprintf("NewMonitoring%s", c.interfaceName)
 	return &ast.FuncDecl{
 		Doc: &ast.CommentGroup{
-			List: []*ast.Comment{&ast.Comment{
-				Text: fmt.Sprintf("// %s creates new monitoring middleware.", funcName),
-			}},
+			List: []*ast.Comment{
+				{
+					Text: fmt.Sprintf("// %s creates new monitoring middleware.", funcName),
+				},
+			},
 		},
 		Name: ast.NewIdent(funcName),
 		Type: &ast.FuncType{
@@ -79,11 +86,12 @@ func (c *ocConstructorBuilder) Build() ast.Decl {
 					funcParamExpr(totalOps, c.metricsPackageName, "Int64Measure", true),
 					funcParamExpr(failedOps, c.metricsPackageName, "Int64Measure", true),
 					funcParamExpr(opsDuration, c.metricsPackageName, "Float64Measure", true),
+					buildCtxFuncParam(ctxFuncName),
 				},
 			},
 			Results: &ast.FieldList{
 				List: []*ast.Field{
-					&ast.Field{
+					{
 						Names: []*ast.Ident{ast.NewIdent("")},
 						Type: &ast.SelectorExpr{
 							X:   ast.NewIdent(c.interfacePackageName),
@@ -105,9 +113,11 @@ type OCMonitoringMethodBuilder struct {
 	method       *astgen.Method
 	receiverName string
 
-	totalOps    *ast.SelectorExpr // selector for the struct member
-	failedOps   *ast.SelectorExpr // selector for the struct member
-	opsDuration *ast.SelectorExpr // selector for the struct member
+	// selectors for the struct members
+	totalOps    *ast.SelectorExpr
+	failedOps   *ast.SelectorExpr
+	opsDuration *ast.SelectorExpr
+	ctxFuncSel  *ast.SelectorExpr
 
 	packageAliases packageAliases
 }
@@ -130,6 +140,7 @@ func NewOCMonitoringMethodBuilder(structName string, methodConfig *astgen.Method
 		totalOps:       selexpr(totalOps),
 		failedOps:      selexpr(failedOps),
 		opsDuration:    selexpr(opsDuration),
+		ctxFuncSel:     selexpr(ctxFuncName),
 		packageAliases: aliases,
 	}
 }
@@ -163,8 +174,17 @@ func (b *OCMonitoringMethodBuilder) Build() ast.Decl {
 	}
 	b.method.AddStatement(initContextVar.Build())
 
-	snakeCaseMethodName := toSnakeCase(b.methodConfig.MethodName)
+	// Run the context decorator func if provided
+	// if m.ctxFunc != nil {
+	//   ctx = m.ctxFunc(ctx)
+	// }
+	ctxDecorator := &ContextDecorator{
+		ctxFieldName: ctxFieldName,
+		ctxFuncSel:   b.ctxFuncSel,
+	}
+	b.method.AddStatement(ctxDecorator.Build())
 
+	snakeCaseMethodName := toSnakeCase(b.methodConfig.MethodName)
 	// Create an opencensus tag
 	//   tagKey, _ := tag.NewKey("operation")
 	createTagKey := &CreateTagKey{
@@ -277,6 +297,44 @@ func (c ContextParam) Build() ast.Stmt {
 		Lhs: lhs,
 		Tok: token.DEFINE,
 		Rhs: rhs,
+	}
+}
+
+type ContextDecorator struct {
+	ctxFieldName string
+	ctxFuncSel   *ast.SelectorExpr
+}
+
+// Build builds a statement to decorate the context with the context func if it is provided.
+//
+//   if m.ctxFunc != nil {
+//     ctx = m.ctxFunc(ctx)
+//   }
+func (c ContextDecorator) Build() ast.Stmt {
+	ctxSel := ast.NewIdent(c.ctxFieldName)
+
+	// ctx = m.ctxFunc(ctx)
+	decorateFuncStmt := &ast.AssignStmt{
+		Lhs: []ast.Expr{ctxSel},
+		Tok: token.ASSIGN,
+		Rhs: []ast.Expr{
+			&ast.CallExpr{
+				Fun:  c.ctxFuncSel,
+				Args: []ast.Expr{ctxSel},
+			},
+		},
+	}
+
+	return &ast.IfStmt{
+		// if m.ctxFunc != nil
+		Cond: &ast.BinaryExpr{
+			X:  c.ctxFuncSel,
+			Op: token.NEQ,
+			Y:  ast.NewIdent("nil"),
+		},
+		Body: &ast.BlockStmt{
+			List: []ast.Stmt{decorateFuncStmt},
+		},
 	}
 }
 
