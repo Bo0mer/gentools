@@ -1,9 +1,11 @@
-package main
+package opencensus
 
 import (
 	"fmt"
 	"go/ast"
 	"go/token"
+
+	"github.com/Bo0mer/gentools/cmd/mongen/internal/common"
 
 	"github.com/Bo0mer/gentools/pkg/astgen"
 )
@@ -35,10 +37,10 @@ func (c *ocConstructorBuilder) Build() ast.Decl {
 						Type: ast.NewIdent(fmt.Sprintf("&monitoring%s", c.interfaceName)),
 						Elts: []ast.Expr{
 							ast.NewIdent("next"),
-							ast.NewIdent(totalOps),
-							ast.NewIdent(failedOps),
-							ast.NewIdent(opsDuration),
-							ast.NewIdent(ctxFuncName),
+							ast.NewIdent(common.TotalOpsMetricName),
+							ast.NewIdent(common.FailedOpsMetricName),
+							ast.NewIdent(common.OpsDurationMetricName),
+							ast.NewIdent(common.ContextDecoratorFuncName),
 						},
 					},
 				},
@@ -83,10 +85,10 @@ func (c *ocConstructorBuilder) Build() ast.Decl {
 			Params: &ast.FieldList{
 				List: []*ast.Field{
 					funcParamExpr("next", c.interfacePackageName, c.interfaceName, false),
-					funcParamExpr(totalOps, c.metricsPackageName, "Int64Measure", true),
-					funcParamExpr(failedOps, c.metricsPackageName, "Int64Measure", true),
-					funcParamExpr(opsDuration, c.metricsPackageName, "Float64Measure", true),
-					buildCtxFuncParam(ctxFuncName),
+					funcParamExpr(common.TotalOpsMetricName, c.metricsPackageName, "Int64Measure", true),
+					funcParamExpr(common.FailedOpsMetricName, c.metricsPackageName, "Int64Measure", true),
+					funcParamExpr(common.OpsDurationMetricName, c.metricsPackageName, "Float64Measure", true),
+					buildCtxFuncParam(common.ContextDecoratorFuncName),
 				},
 			},
 			Results: &ast.FieldList{
@@ -105,10 +107,10 @@ func (c *ocConstructorBuilder) Build() ast.Decl {
 	}
 }
 
-// OCMonitoringMethodBuilder is responsible for creating a method that implements
+// ocMonitoringMethodBuilder is responsible for creating a method that implements
 // the original method from the interface and does all the measurement and
 // recording logic using opencensus.
-type OCMonitoringMethodBuilder struct {
+type ocMonitoringMethodBuilder struct {
 	methodConfig *astgen.MethodConfig
 	method       *astgen.Method
 	receiverName string
@@ -122,7 +124,7 @@ type OCMonitoringMethodBuilder struct {
 	packageAliases packageAliases
 }
 
-func NewOCMonitoringMethodBuilder(structName string, methodConfig *astgen.MethodConfig, aliases packageAliases) *OCMonitoringMethodBuilder {
+func newOCMonitoringMethodBuilder(structName string, methodConfig *astgen.MethodConfig, aliases packageAliases) *ocMonitoringMethodBuilder {
 	receiverName := "m"
 	method := astgen.NewMethod(methodConfig.MethodName, receiverName, structName)
 
@@ -133,19 +135,19 @@ func NewOCMonitoringMethodBuilder(structName string, methodConfig *astgen.Method
 		}
 	}
 
-	return &OCMonitoringMethodBuilder{
+	return &ocMonitoringMethodBuilder{
 		methodConfig:   methodConfig,
 		method:         method,
 		receiverName:   receiverName,
-		totalOps:       selexpr(totalOps),
-		failedOps:      selexpr(failedOps),
-		opsDuration:    selexpr(opsDuration),
-		ctxFuncSel:     selexpr(ctxFuncName),
+		totalOps:       selexpr(common.TotalOpsMetricName),
+		failedOps:      selexpr(common.FailedOpsMetricName),
+		opsDuration:    selexpr(common.OpsDurationMetricName),
+		ctxFuncSel:     selexpr(common.ContextDecoratorFuncName),
 		packageAliases: aliases,
 	}
 }
 
-func (b *OCMonitoringMethodBuilder) Build() ast.Decl {
+func (b *ocMonitoringMethodBuilder) Build() ast.Decl {
 	// Add the func declaration
 	//   func ([b.method.receiverName] [b.method.receiverType]) [funcName]([MethodParams...]) ([MethodResults...]) {
 	b.method.SetType(&ast.FuncType{
@@ -153,7 +155,7 @@ func (b *OCMonitoringMethodBuilder) Build() ast.Decl {
 			List: b.methodConfig.MethodParams,
 		},
 		Results: &ast.FieldList{
-			List: fieldsAsAnonymous(b.methodConfig.MethodResults),
+			List: common.FieldsAsAnonymous(b.methodConfig.MethodResults),
 		},
 	})
 
@@ -167,7 +169,7 @@ func (b *OCMonitoringMethodBuilder) Build() ast.Decl {
 	//   ctx := [contextPkg].Background()
 	// or
 	//   ctx := [ctxFieldName]
-	initContextVar := &ContextParam{
+	initContextVar := &contextParam{
 		ctxFieldName:    ctxFieldName,
 		ctxPackageAlias: b.packageAliases.contextPkg,
 		methodConfig:    b.methodConfig,
@@ -178,16 +180,16 @@ func (b *OCMonitoringMethodBuilder) Build() ast.Decl {
 	// if m.ctxFunc != nil {
 	//   ctx = m.ctxFunc(ctx)
 	// }
-	ctxDecorator := &ContextDecorator{
+	ctxDecorator := &contextDecorator{
 		ctxFieldName: ctxFieldName,
 		ctxFuncSel:   b.ctxFuncSel,
 	}
 	b.method.AddStatement(ctxDecorator.Build())
 
-	snakeCaseMethodName := toSnakeCase(b.methodConfig.MethodName)
+	snakeCaseMethodName := common.ToSnakeCase(b.methodConfig.MethodName)
 	// Create an opencensus tag
 	//   tagKey, _ := tag.MustNewKey("operation")
-	createTagKey := &CreateTagKey{
+	createTagKey := &createTagKey{
 		ctxFieldName:      ctxFieldName,
 		tagPackageAlias:   b.packageAliases.tagPkg,
 		tagKeyVarName:     tagKeyVarName,
@@ -201,7 +203,7 @@ func (b *OCMonitoringMethodBuilder) Build() ast.Decl {
 	//   if err != nil {
 	//     panic(err)
 	//   }
-	insertInContext := InsertTagInContext{
+	insertInContext := insertTagInContext{
 		ctxFieldName:      ctxFieldName,
 		tagPackageAlias:   b.packageAliases.tagPkg,
 		tagKeyVarName:     tagKeyVarName,
@@ -211,7 +213,7 @@ func (b *OCMonitoringMethodBuilder) Build() ast.Decl {
 
 	// Add increase total operations statement
 	// 	 stats.Record(ctx, m.totalOps.M(1))
-	increaseTotalOps := &RecordStat{
+	increaseTotalOps := &recordStat{
 		statsPackageAlias: b.packageAliases.statsPkg,
 		ctxFieldName:      ctxFieldName,
 		statField:         b.totalOps,
@@ -220,14 +222,14 @@ func (b *OCMonitoringMethodBuilder) Build() ast.Decl {
 
 	// Add statement to capture current time
 	//   start := time.Now()
-	b.method.AddStatement(startTimeRecorder{
-		timePackageAlias: b.packageAliases.timePkg,
-		startFieldName:   startFieldName,
+	b.method.AddStatement(common.StartTimeRecorder{
+		TimePackageAlias: b.packageAliases.timePkg,
+		StartFieldName:   startFieldName,
 	}.Build())
 
 	// Add method invocation:
 	//   result1, result2 := m.next.Method(arg1, arg2)
-	methodInvocation := NewMethodInvocation(b.methodConfig)
+	methodInvocation := common.NewMethodInvocation(b.methodConfig)
 	methodInvocation.SetReceiver(&ast.SelectorExpr{
 		X:   ast.NewIdent(b.receiverName),
 		Sel: ast.NewIdent("next"),
@@ -236,7 +238,7 @@ func (b *OCMonitoringMethodBuilder) Build() ast.Decl {
 
 	// Record operation duration
 	//   stats.Record(ctx, m.opsDuration.M(time.Since(start).Seconds()))
-	b.method.AddStatement(RecordOpsDurationStats{
+	b.method.AddStatement(recordOpsDurationStats{
 		opsDurationField:  b.opsDuration,
 		statsPackageAlias: b.packageAliases.statsPkg,
 		startFieldName:    startFieldName,
@@ -246,7 +248,7 @@ func (b *OCMonitoringMethodBuilder) Build() ast.Decl {
 
 	// Add increase failed operations statement
 	//   if err != nil { m.failedOps.Add(1) }
-	b.method.AddStatement(IncrementFailedOps{
+	b.method.AddStatement(incrementFailedOps{
 		failedOpsField:    b.failedOps,
 		method:            b.methodConfig,
 		counterField:      "failedOps",
@@ -256,13 +258,13 @@ func (b *OCMonitoringMethodBuilder) Build() ast.Decl {
 
 	// Add return statement
 	//   return result1, result2
-	returnResults := NewReturnResults(b.methodConfig)
+	returnResults := common.NewReturnResults(b.methodConfig)
 	b.method.AddStatement(returnResults.Build())
 
 	return b.method.Build()
 }
 
-type ContextParam struct {
+type contextParam struct {
 	ctxFieldName    string
 	ctxPackageAlias string
 	methodConfig    *astgen.MethodConfig
@@ -271,7 +273,7 @@ type ContextParam struct {
 // Build builds a context variable initialization or assignment. If the methodConfig shows that the first parameter is
 // of type context it will be assigned to a a "ctxFieldName" variable. If not ctx will be initialized as context.Background()
 // ctx
-func (c ContextParam) Build() ast.Stmt {
+func (c contextParam) Build() ast.Stmt {
 	// [c.ctxFieldName] :=
 	lhs := []ast.Expr{ast.NewIdent(c.ctxFieldName)}
 
@@ -304,7 +306,7 @@ func (c ContextParam) Build() ast.Stmt {
 	}
 }
 
-type ContextDecorator struct {
+type contextDecorator struct {
 	ctxFieldName string
 	ctxFuncSel   *ast.SelectorExpr
 }
@@ -314,7 +316,7 @@ type ContextDecorator struct {
 //   if m.ctxFunc != nil {
 //     ctx = m.ctxFunc(ctx)
 //   }
-func (c ContextDecorator) Build() ast.Stmt {
+func (c contextDecorator) Build() ast.Stmt {
 	ctxSel := ast.NewIdent(c.ctxFieldName)
 
 	// ctx = m.ctxFunc(ctx)
@@ -342,7 +344,7 @@ func (c ContextDecorator) Build() ast.Stmt {
 	}
 }
 
-type CreateTagKey struct {
+type createTagKey struct {
 	ctxFieldName      string
 	tagPackageAlias   string
 	tagKeyVarName     string
@@ -351,7 +353,7 @@ type CreateTagKey struct {
 
 // Build builds a opencensus tag key.
 //   tagKey, _ := tag.NewKey("operation")
-func (t CreateTagKey) Build() ast.Stmt {
+func (t createTagKey) Build() ast.Stmt {
 	// tagKey, _ :=
 	return &ast.AssignStmt{
 		Lhs: []ast.Expr{
@@ -373,7 +375,7 @@ func (t CreateTagKey) Build() ast.Stmt {
 	}
 }
 
-type InsertTagInContext struct {
+type insertTagInContext struct {
 	ctxFieldName      string
 	tagPackageAlias   string
 	tagKeyVarName     string
@@ -386,7 +388,7 @@ type InsertTagInContext struct {
 //   if err != nil {
 //     panic(err)
 //   }
-func (t InsertTagInContext) Build() []ast.Stmt {
+func (t insertTagInContext) Build() []ast.Stmt {
 	var stmts []ast.Stmt
 
 	errSel := ast.NewIdent("err")
@@ -399,7 +401,7 @@ func (t InsertTagInContext) Build() []ast.Stmt {
 }
 
 // buildVarErrStmt builds the `var err error` statement
-func (t InsertTagInContext) buildVarErrStmt(errSel *ast.Ident) ast.Stmt {
+func (t insertTagInContext) buildVarErrStmt(errSel *ast.Ident) ast.Stmt {
 	return &ast.DeclStmt{
 		Decl: &ast.GenDecl{
 			Tok: token.VAR,
@@ -417,7 +419,7 @@ func (t InsertTagInContext) buildVarErrStmt(errSel *ast.Ident) ast.Stmt {
 //   if [initStmt]; [errSel] != nil {
 //     panic([errSel])
 //   }
-func (t InsertTagInContext) buildIfErrThenPanicStmt(initStmt ast.Stmt, errSel ast.Expr) ast.Stmt {
+func (t insertTagInContext) buildIfErrThenPanicStmt(initStmt ast.Stmt, errSel ast.Expr) ast.Stmt {
 	panicCallExpr := &ast.CallExpr{
 		Fun:  ast.NewIdent("panic"),
 		Args: []ast.Expr{errSel},
@@ -442,7 +444,7 @@ func (t InsertTagInContext) buildIfErrThenPanicStmt(initStmt ast.Stmt, errSel as
 
 // buildNewTagStmt builds the creation of the new tag and the assignment to the result variables.
 //   [t.ctxFieldName], [errSel] = tag.Insert(tagKey, [t.wrapped_method_name])
-func (t InsertTagInContext) buildNewTagStmt(errSel ast.Expr) ast.Stmt {
+func (t insertTagInContext) buildNewTagStmt(errSel ast.Expr) ast.Stmt {
 	// tag.Insert(tagKey, [t.wrapped_method_name])
 	insertKey := &ast.CallExpr{
 		Fun: &ast.SelectorExpr{
@@ -478,7 +480,7 @@ func (t InsertTagInContext) buildNewTagStmt(errSel ast.Expr) ast.Stmt {
 	}
 }
 
-type RecordStat struct {
+type recordStat struct {
 	statField         *ast.SelectorExpr
 	ctxFieldName      string
 	statsPackageAlias string
@@ -486,7 +488,7 @@ type RecordStat struct {
 
 // Build builds a statement in the form:
 // stats.Record(ctx, [statField].M(1))
-func (r RecordStat) Build() ast.Stmt {
+func (r recordStat) Build() ast.Stmt {
 	return &ast.ExprStmt{
 		X: statsRecordCallExpr(r.statsPackageAlias, r.ctxFieldName, &ast.CallExpr{
 			Fun: &ast.SelectorExpr{
@@ -500,7 +502,7 @@ func (r RecordStat) Build() ast.Stmt {
 	}
 }
 
-type RecordOpsDurationStats struct {
+type recordOpsDurationStats struct {
 	opsDurationField  *ast.SelectorExpr
 	startFieldName    string
 	statsPackageAlias string
@@ -510,7 +512,7 @@ type RecordOpsDurationStats struct {
 
 // Build builds a statement in the form:
 // stats.Record(ctx, [opsDurationField].M([timePackageAlias].Since([startFieldName]).Seconds()))
-func (r RecordOpsDurationStats) Build() ast.Stmt {
+func (r recordOpsDurationStats) Build() ast.Stmt {
 	return &ast.ExprStmt{
 		X: statsRecordCallExpr(r.statsPackageAlias, r.ctxFieldName, &ast.CallExpr{
 			// stats.Record(ctx, [opsDurationField].M(...)
@@ -537,7 +539,7 @@ func (r RecordOpsDurationStats) Build() ast.Stmt {
 	}
 }
 
-type IncrementFailedOps struct {
+type incrementFailedOps struct {
 	failedOpsField    *ast.SelectorExpr
 	method            *astgen.MethodConfig
 	counterField      string
@@ -545,7 +547,7 @@ type IncrementFailedOps struct {
 	statsPackageAlias string
 }
 
-func (i IncrementFailedOps) Build() ast.Stmt {
+func (i incrementFailedOps) Build() ast.Stmt {
 	var errorResult ast.Expr
 	for _, result := range i.method.MethodResults {
 		if id, ok := result.Type.(*ast.Ident); ok {
@@ -568,26 +570,11 @@ func (i IncrementFailedOps) Build() ast.Stmt {
 			Y:  ast.NewIdent("nil"),
 		},
 		Body: &ast.BlockStmt{
-			List: []ast.Stmt{RecordStat{
+			List: []ast.Stmt{recordStat{
 				statsPackageAlias: i.statsPackageAlias,
 				statField:         i.failedOpsField,
 				ctxFieldName:      i.ctxFieldName,
 			}.Build()},
-		},
-	}
-}
-
-// statsRecordCallExpr prepares the opencensus -> stats.Record(ctx, ... statement, sets the
-// provided parameter as second argument and returns the built expression.
-func statsRecordCallExpr(statsPackageAlias string, ctxFieldName string, statToRecord ast.Expr) *ast.CallExpr {
-	return &ast.CallExpr{
-		Fun: &ast.SelectorExpr{
-			X:   ast.NewIdent(statsPackageAlias),
-			Sel: ast.NewIdent("Record"),
-		},
-		Args: []ast.Expr{
-			ast.NewIdent(ctxFieldName),
-			statToRecord,
 		},
 	}
 }

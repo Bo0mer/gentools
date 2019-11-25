@@ -1,7 +1,9 @@
-package main
+package gokit
 
 import (
 	"go/ast"
+
+	"github.com/Bo0mer/gentools/cmd/mongen/internal/common"
 
 	"github.com/Bo0mer/gentools/pkg/astgen"
 )
@@ -13,7 +15,7 @@ type goKitModel struct {
 	timePackageAlias string
 }
 
-func newGoKitModel(interfacePath, interfaceName, structName, targetPkg string) *goKitModel {
+func NewGoKitModel(interfacePath, interfaceName, structName, targetPkg string) *goKitModel {
 	file := astgen.NewFile(targetPkg)
 	strct := astgen.NewStruct(structName)
 	file.AppendDeclaration(strct)
@@ -30,9 +32,9 @@ func newGoKitModel(interfacePath, interfaceName, structName, targetPkg string) *
 	file.AppendDeclaration(constructorBuilder)
 
 	strct.AddField("next", sourcePackageAlias, interfaceName)
-	strct.AddField(totalOps, metricsAlias, "Counter")
-	strct.AddField(failedOps, metricsAlias, "Counter")
-	strct.AddField(opsDuration, metricsAlias, "Histogram")
+	strct.AddField(common.TotalOpsMetricName, metricsAlias, "Counter")
+	strct.AddField(common.FailedOpsMetricName, metricsAlias, "Counter")
+	strct.AddField(common.OpsDurationMetricName, metricsAlias, "Histogram")
 
 	return m
 }
@@ -42,7 +44,7 @@ func (m *goKitModel) AddImport(pkgName, location string) string {
 }
 
 func (m *goKitModel) AddMethod(method *astgen.MethodConfig) error {
-	mmb := NewMonitoringMethodBuilder(m.structName, method)
+	mmb := newMonitoringMethodBuilder(m.structName, method)
 
 	mmb.SetTimePackageAlias(m.timePackageAlias)
 

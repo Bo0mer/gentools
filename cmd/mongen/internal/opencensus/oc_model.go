@@ -1,7 +1,9 @@
-package main
+package opencensus
 
 import (
 	"go/ast"
+
+	"github.com/Bo0mer/gentools/cmd/mongen/internal/common"
 
 	"github.com/Bo0mer/gentools/pkg/astgen"
 )
@@ -21,7 +23,7 @@ type opencensusModel struct {
 	packageAliases packageAliases
 }
 
-func newOpencensusModel(interfacePath, interfaceName, structName, targetPkg string) *opencensusModel {
+func NewOpencensusModel(interfacePath, interfaceName, structName, targetPkg string) *opencensusModel {
 	file := astgen.NewFile(targetPkg)
 
 	m := &opencensusModel{
@@ -38,10 +40,10 @@ func newOpencensusModel(interfacePath, interfaceName, structName, targetPkg stri
 
 	strct := astgen.NewStruct(structName)
 	strct.AddField("next", sourcePackageAlias, interfaceName)
-	strct.AddFieldWithType(totalOps, pointerExpr(m.packageAliases.statsPkg, "Int64Measure"))
-	strct.AddFieldWithType(failedOps, pointerExpr(m.packageAliases.statsPkg, "Int64Measure"))
-	strct.AddFieldWithType(opsDuration, pointerExpr(m.packageAliases.statsPkg, "Float64Measure"))
-	strct.AddFieldWithType(ctxFuncName, buildCtxFuncType(m.packageAliases.contextPkg))
+	strct.AddFieldWithType(common.TotalOpsMetricName, pointerExpr(m.packageAliases.statsPkg, "Int64Measure"))
+	strct.AddFieldWithType(common.FailedOpsMetricName, pointerExpr(m.packageAliases.statsPkg, "Int64Measure"))
+	strct.AddFieldWithType(common.OpsDurationMetricName, pointerExpr(m.packageAliases.statsPkg, "Float64Measure"))
+	strct.AddFieldWithType(common.ContextDecoratorFuncName, buildCtxFuncType(m.packageAliases.contextPkg))
 	file.AppendDeclaration(strct)
 
 	constructorBuilder := newOCConstructorBuilder(
@@ -56,7 +58,7 @@ func (m *opencensusModel) AddImport(pkgName, location string) string {
 }
 
 func (m *opencensusModel) AddMethod(method *astgen.MethodConfig) error {
-	mmb := NewOCMonitoringMethodBuilder(m.structName, method, m.packageAliases)
+	mmb := newOCMonitoringMethodBuilder(m.structName, method, m.packageAliases)
 
 	m.fileBuilder.AppendDeclaration(mmb)
 	return nil

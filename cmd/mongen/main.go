@@ -14,6 +14,12 @@ import (
 	"path"
 	"path/filepath"
 
+	"github.com/Bo0mer/gentools/cmd/mongen/internal/opencensus"
+
+	"github.com/Bo0mer/gentools/cmd/mongen/internal/gokit"
+
+	"github.com/Bo0mer/gentools/cmd/mongen/internal/common"
+
 	"github.com/Bo0mer/gentools/pkg/astgen"
 	"github.com/Bo0mer/gentools/pkg/resolution"
 )
@@ -126,7 +132,7 @@ func main() {
 }
 
 func filename(interfaceName string) string {
-	return fmt.Sprintf("monitoring_%s.go", toSnakeCase(interfaceName))
+	return fmt.Sprintf("monitoring_%s.go", common.ToSnakeCase(interfaceName))
 }
 
 func dirToImport(p string) (string, error) {
@@ -150,9 +156,9 @@ type model interface {
 func newModel(provider string, interfacePath, interfaceName, structName, targetPkg string) (model, error) {
 	switch provider {
 	case goKitProvider:
-		return newGoKitModel(interfacePath, interfaceName, structName, targetPkg), nil
+		return gokit.NewGoKitModel(interfacePath, interfaceName, structName, targetPkg), nil
 	case opencensusProvider:
-		return newOpencensusModel(interfacePath, interfaceName, structName, targetPkg), nil
+		return opencensus.NewOpencensusModel(interfacePath, interfaceName, structName, targetPkg), nil
 	}
 	return nil, fmt.Errorf("unknown provider: %s", provider)
 }

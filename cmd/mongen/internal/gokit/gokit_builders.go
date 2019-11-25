@@ -1,9 +1,11 @@
-package main
+package gokit
 
 import (
 	"fmt"
 	"go/ast"
 	"go/token"
+
+	"github.com/Bo0mer/gentools/cmd/mongen/internal/common"
 
 	"github.com/Bo0mer/gentools/pkg/astgen"
 )
@@ -53,21 +55,21 @@ func (c *constructorBuilder) Build() ast.Decl {
 						},
 					},
 					&ast.Field{
-						Names: []*ast.Ident{ast.NewIdent(totalOps)},
+						Names: []*ast.Ident{ast.NewIdent(common.TotalOpsMetricName)},
 						Type: &ast.SelectorExpr{
 							X:   ast.NewIdent(c.metricsPackageName),
 							Sel: ast.NewIdent("Counter"),
 						},
 					},
 					&ast.Field{
-						Names: []*ast.Ident{ast.NewIdent(failedOps)},
+						Names: []*ast.Ident{ast.NewIdent(common.FailedOpsMetricName)},
 						Type: &ast.SelectorExpr{
 							X:   ast.NewIdent(c.metricsPackageName),
 							Sel: ast.NewIdent("Counter"),
 						},
 					},
 					&ast.Field{
-						Names: []*ast.Ident{ast.NewIdent(opsDuration)},
+						Names: []*ast.Ident{ast.NewIdent(common.OpsDurationMetricName)},
 						Type: &ast.SelectorExpr{
 							X:   ast.NewIdent(c.metricsPackageName),
 							Sel: ast.NewIdent("Histogram"),
@@ -91,10 +93,10 @@ func (c *constructorBuilder) Build() ast.Decl {
 	}
 }
 
-// MonitoringMethodBuilder is responsible for creating a method that implements
+// monitoringMethodBuilder is responsible for creating a method that implements
 // the original method from the interface and does all the measurement and
 // recording logic.
-type MonitoringMethodBuilder struct {
+type monitoringMethodBuilder struct {
 	methodConfig *astgen.MethodConfig
 	method       *astgen.Method
 
@@ -105,7 +107,7 @@ type MonitoringMethodBuilder struct {
 	timePackageAlias string
 }
 
-func NewMonitoringMethodBuilder(structName string, methodConfig *astgen.MethodConfig) *MonitoringMethodBuilder {
+func newMonitoringMethodBuilder(structName string, methodConfig *astgen.MethodConfig) *monitoringMethodBuilder {
 	method := astgen.NewMethod(methodConfig.MethodName, "m", structName)
 
 	selexpr := func(fieldName string) *ast.SelectorExpr {
@@ -115,26 +117,26 @@ func NewMonitoringMethodBuilder(structName string, methodConfig *astgen.MethodCo
 		}
 	}
 
-	return &MonitoringMethodBuilder{
+	return &monitoringMethodBuilder{
 		methodConfig: methodConfig,
 		method:       method,
-		totalOps:     selexpr(totalOps),
-		failedOps:    selexpr(failedOps),
-		opsDuration:  selexpr(opsDuration),
+		totalOps:     selexpr(common.TotalOpsMetricName),
+		failedOps:    selexpr(common.FailedOpsMetricName),
+		opsDuration:  selexpr(common.OpsDurationMetricName),
 	}
 }
 
-func (b *MonitoringMethodBuilder) SetTimePackageAlias(alias string) {
+func (b *monitoringMethodBuilder) SetTimePackageAlias(alias string) {
 	b.timePackageAlias = alias
 }
 
-func (b *MonitoringMethodBuilder) Build() ast.Decl {
+func (b *monitoringMethodBuilder) Build() ast.Decl {
 	b.method.SetType(&ast.FuncType{
 		Params: &ast.FieldList{
 			List: b.methodConfig.MethodParams,
 		},
 		Results: &ast.FieldList{
-			List: fieldsAsAnonymous(b.methodConfig.MethodResults),
+			List: common.FieldsAsAnonymous(b.methodConfig.MethodResults),
 		},
 	})
 
@@ -145,11 +147,11 @@ func (b *MonitoringMethodBuilder) Build() ast.Decl {
 
 	// Add statement to capture current time
 	//   start := time.Now()
-	b.method.AddStatement(RecordStartTime(b.timePackageAlias).Build())
+	b.method.AddStatement(common.RecordStartTime(b.timePackageAlias).Build())
 
 	// Add method invocation:
 	//   result1, result2 := m.next.Method(arg1, arg2)
-	methodInvocation := NewMethodInvocation(b.methodConfig)
+	methodInvocation := common.NewMethodInvocation(b.methodConfig)
 	methodInvocation.SetReceiver(&ast.SelectorExpr{
 		X:   ast.NewIdent("m"), // receiver name
 		Sel: ast.NewIdent("next"),
@@ -167,7 +169,7 @@ func (b *MonitoringMethodBuilder) Build() ast.Decl {
 
 	// Add return statement
 	//   return result1, result2
-	returnResults := NewReturnResults(b.methodConfig)
+	returnResults := common.NewReturnResults(b.methodConfig)
 	b.method.AddStatement(returnResults.Build())
 
 	return b.method.Build()
@@ -186,7 +188,7 @@ func (c *CounterAddAction) Build() ast.Stmt {
 		},
 		Args: []ast.Expr{
 			&ast.BasicLit{Kind: token.STRING, Value: `"operation"`},
-			&ast.BasicLit{Kind: token.STRING, Value: fmt.Sprintf(`"%s"`, toSnakeCase(c.operationName))},
+			&ast.BasicLit{Kind: token.STRING, Value: fmt.Sprintf(`"%s"`, common.ToSnakeCase(c.operationName))},
 		},
 	}
 
@@ -203,51 +205,6 @@ func (c *CounterAddAction) Build() ast.Stmt {
 	return &ast.ExprStmt{
 		X: callAddExpr,
 	}
-}
-
-type MethodInvocation struct {
-	receiver *ast.SelectorExpr
-	method   *astgen.MethodConfig
-}
-
-func (m *MethodInvocation) SetReceiver(s *ast.SelectorExpr) {
-	m.receiver = s
-}
-
-func NewMethodInvocation(method *astgen.MethodConfig) *MethodInvocation {
-	return &MethodInvocation{method: method}
-}
-
-func (m *MethodInvocation) Build() ast.Stmt {
-	resultSelectors := []ast.Expr{}
-	for _, result := range m.method.MethodResults {
-		resultSelectors = append(resultSelectors, ast.NewIdent(result.Names[0].String()))
-	}
-
-	paramSelectors := []ast.Expr{}
-	for _, param := range m.method.MethodParams {
-		paramSelectors = append(paramSelectors, ast.NewIdent(param.Names[0].String()))
-	}
-
-	callExpr := &ast.CallExpr{
-		Fun: &ast.SelectorExpr{
-			X:   m.receiver,
-			Sel: ast.NewIdent(m.method.MethodName),
-		},
-		Args: paramSelectors,
-	}
-
-	if m.method.HasResults() {
-		return &ast.AssignStmt{
-			Lhs: resultSelectors,
-			Tok: token.DEFINE,
-			Rhs: []ast.Expr{
-				callExpr,
-			},
-		}
-	}
-
-	return &ast.ExprStmt{X: callExpr}
 }
 
 type IncreaseFailedOps struct {
@@ -281,7 +238,7 @@ func (i *IncreaseFailedOps) Build() ast.Stmt {
 		},
 		Args: []ast.Expr{
 			&ast.BasicLit{Kind: token.STRING, Value: `"operation"`},
-			&ast.BasicLit{Kind: token.STRING, Value: fmt.Sprintf(`"%s"`, toSnakeCase(i.method.MethodName))},
+			&ast.BasicLit{Kind: token.STRING, Value: fmt.Sprintf(`"%s"`, common.ToSnakeCase(i.method.MethodName))},
 		},
 	}
 
@@ -307,55 +264,6 @@ func (i *IncreaseFailedOps) Build() ast.Stmt {
 		},
 		Body: &ast.BlockStmt{
 			List: []ast.Stmt{callStmt},
-		},
-	}
-}
-
-type ReturnResults struct {
-	method *astgen.MethodConfig
-}
-
-func NewReturnResults(m *astgen.MethodConfig) *ReturnResults {
-	return &ReturnResults{m}
-}
-
-func (r *ReturnResults) Build() ast.Stmt {
-	resultSelectors := []ast.Expr{}
-	for _, result := range r.method.MethodResults {
-		resultSelectors = append(resultSelectors, ast.NewIdent(result.Names[0].String()))
-	}
-
-	return &ast.ReturnStmt{
-		Results: resultSelectors,
-	}
-}
-
-type startTimeRecorder struct {
-	timePackageAlias string
-	startFieldName   string
-}
-
-func RecordStartTime(timePackageAlias string) *startTimeRecorder {
-	return &startTimeRecorder{timePackageAlias: timePackageAlias}
-}
-
-func (r startTimeRecorder) Build() ast.Stmt {
-	callExpr := &ast.CallExpr{
-		Fun: &ast.SelectorExpr{
-			X:   ast.NewIdent(r.timePackageAlias),
-			Sel: ast.NewIdent("Now"),
-		},
-	}
-
-	startFieldName := r.startFieldName
-	if startFieldName == "" {
-		startFieldName = "_start"
-	}
-	return &ast.AssignStmt{
-		Lhs: []ast.Expr{ast.NewIdent(startFieldName)},
-		Tok: token.DEFINE,
-		Rhs: []ast.Expr{
-			callExpr,
 		},
 	}
 }
@@ -397,7 +305,7 @@ func (r RecordOpDuration) Build() ast.Stmt {
 		},
 		Args: []ast.Expr{
 			&ast.BasicLit{Kind: token.STRING, Value: `"operation"`},
-			&ast.BasicLit{Kind: token.STRING, Value: fmt.Sprintf(`"%s"`, toSnakeCase(r.operationName))},
+			&ast.BasicLit{Kind: token.STRING, Value: fmt.Sprintf(`"%s"`, common.ToSnakeCase(r.operationName))},
 		},
 	}
 
