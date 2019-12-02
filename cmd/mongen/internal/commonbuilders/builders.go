@@ -1,10 +1,21 @@
-package common
+package commonbuilders
 
 import (
 	"go/ast"
 	"go/token"
 
 	"github.com/Bo0mer/gentools/pkg/astgen"
+)
+
+// constructor parameter names
+const (
+	// metric params
+	TotalOpsMetricName    = "totalOps"
+	FailedOpsMetricName   = "failedOps"
+	OpsDurationMetricName = "opsDuration"
+
+	// context decorator param
+	ContextDecoratorFuncName = "ctxFunc"
 )
 
 type StartTimeRecorder struct {

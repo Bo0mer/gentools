@@ -8,6 +8,7 @@ import (
 	"io"
 
 	"github.com/Bo0mer/gentools/pkg/astgen"
+	"github.com/Bo0mer/gentools/pkg/transformation"
 )
 
 type model struct {
@@ -161,7 +162,7 @@ func (b *tracingMethodBuilder) Build() ast.Decl {
 			List: b.methodConfig.MethodParams,
 		},
 		Results: &ast.FieldList{
-			List: fieldsAsAnonymous(b.methodConfig.MethodResults),
+			List: transformation.FieldsAsAnonymous(b.methodConfig.MethodResults),
 		},
 	})
 

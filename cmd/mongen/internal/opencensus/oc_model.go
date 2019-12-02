@@ -3,16 +3,15 @@ package opencensus
 import (
 	"go/ast"
 
-	"github.com/Bo0mer/gentools/cmd/mongen/internal/common"
-
+	"github.com/Bo0mer/gentools/cmd/mongen/internal/commonbuilders"
 	"github.com/Bo0mer/gentools/pkg/astgen"
 )
 
 // packageAliases holds the aliases of all imported packages in the generated source file.
 type packageAliases struct {
-	statsPkg   string
-	timePkg    string
 	contextPkg string
+	timePkg    string
+	statsPkg   string
 	tagPkg     string
 }
 
@@ -29,21 +28,22 @@ func NewOpencensusModel(interfacePath, interfaceName, structName, targetPkg stri
 	m := &opencensusModel{
 		fileBuilder: file,
 		structName:  structName,
+		packageAliases: packageAliases{
+			contextPkg: file.AddImport("", "context"),
+			timePkg:    file.AddImport("", "time"),
+			statsPkg:   file.AddImport("", "go.opencensus.io/stats"),
+			tagPkg:     file.AddImport("", "go.opencensus.io/tag"),
+		},
 	}
 
-	m.packageAliases = packageAliases{}
-	m.packageAliases.contextPkg = m.AddImport("", "context")
-	m.packageAliases.statsPkg = m.AddImport("", "go.opencensus.io/stats")
-	m.packageAliases.tagPkg = m.AddImport("", "go.opencensus.io/tag")
-	m.packageAliases.timePkg = m.AddImport("", "time")
-	sourcePackageAlias := m.AddImport("", interfacePath)
+	sourcePackageAlias := file.AddImport("", interfacePath)
 
 	strct := astgen.NewStruct(structName)
 	strct.AddField("next", sourcePackageAlias, interfaceName)
-	strct.AddFieldWithType(common.TotalOpsMetricName, pointerExpr(m.packageAliases.statsPkg, "Int64Measure"))
-	strct.AddFieldWithType(common.FailedOpsMetricName, pointerExpr(m.packageAliases.statsPkg, "Int64Measure"))
-	strct.AddFieldWithType(common.OpsDurationMetricName, pointerExpr(m.packageAliases.statsPkg, "Float64Measure"))
-	strct.AddFieldWithType(common.ContextDecoratorFuncName, buildCtxFuncType(m.packageAliases.contextPkg))
+	strct.AddFieldWithType(commonbuilders.TotalOpsMetricName, pointerExpr(m.packageAliases.statsPkg, "Int64Measure"))
+	strct.AddFieldWithType(commonbuilders.FailedOpsMetricName, pointerExpr(m.packageAliases.statsPkg, "Int64Measure"))
+	strct.AddFieldWithType(commonbuilders.OpsDurationMetricName, pointerExpr(m.packageAliases.statsPkg, "Float64Measure"))
+	strct.AddFieldWithType(commonbuilders.ContextDecoratorFuncName, buildCtxFuncType(m.packageAliases.contextPkg))
 	file.AppendDeclaration(strct)
 
 	constructorBuilder := newOCConstructorBuilder(

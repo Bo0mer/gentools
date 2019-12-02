@@ -5,9 +5,9 @@ import (
 	"go/ast"
 	"go/token"
 
-	"github.com/Bo0mer/gentools/cmd/mongen/internal/common"
-
+	"github.com/Bo0mer/gentools/cmd/mongen/internal/commonbuilders"
 	"github.com/Bo0mer/gentools/pkg/astgen"
+	"github.com/Bo0mer/gentools/pkg/transformation"
 )
 
 type constructorBuilder struct {
@@ -55,21 +55,21 @@ func (c *constructorBuilder) Build() ast.Decl {
 						},
 					},
 					&ast.Field{
-						Names: []*ast.Ident{ast.NewIdent(common.TotalOpsMetricName)},
+						Names: []*ast.Ident{ast.NewIdent(commonbuilders.TotalOpsMetricName)},
 						Type: &ast.SelectorExpr{
 							X:   ast.NewIdent(c.metricsPackageName),
 							Sel: ast.NewIdent("Counter"),
 						},
 					},
 					&ast.Field{
-						Names: []*ast.Ident{ast.NewIdent(common.FailedOpsMetricName)},
+						Names: []*ast.Ident{ast.NewIdent(commonbuilders.FailedOpsMetricName)},
 						Type: &ast.SelectorExpr{
 							X:   ast.NewIdent(c.metricsPackageName),
 							Sel: ast.NewIdent("Counter"),
 						},
 					},
 					&ast.Field{
-						Names: []*ast.Ident{ast.NewIdent(common.OpsDurationMetricName)},
+						Names: []*ast.Ident{ast.NewIdent(commonbuilders.OpsDurationMetricName)},
 						Type: &ast.SelectorExpr{
 							X:   ast.NewIdent(c.metricsPackageName),
 							Sel: ast.NewIdent("Histogram"),
@@ -120,9 +120,9 @@ func newMonitoringMethodBuilder(structName string, methodConfig *astgen.MethodCo
 	return &monitoringMethodBuilder{
 		methodConfig: methodConfig,
 		method:       method,
-		totalOps:     selexpr(common.TotalOpsMetricName),
-		failedOps:    selexpr(common.FailedOpsMetricName),
-		opsDuration:  selexpr(common.OpsDurationMetricName),
+		totalOps:     selexpr(commonbuilders.TotalOpsMetricName),
+		failedOps:    selexpr(commonbuilders.FailedOpsMetricName),
+		opsDuration:  selexpr(commonbuilders.OpsDurationMetricName),
 	}
 }
 
@@ -136,7 +136,7 @@ func (b *monitoringMethodBuilder) Build() ast.Decl {
 			List: b.methodConfig.MethodParams,
 		},
 		Results: &ast.FieldList{
-			List: common.FieldsAsAnonymous(b.methodConfig.MethodResults),
+			List: transformation.FieldsAsAnonymous(b.methodConfig.MethodResults),
 		},
 	})
 
@@ -147,11 +147,11 @@ func (b *monitoringMethodBuilder) Build() ast.Decl {
 
 	// Add statement to capture current time
 	//   start := time.Now()
-	b.method.AddStatement(common.RecordStartTime(b.timePackageAlias).Build())
+	b.method.AddStatement(commonbuilders.RecordStartTime(b.timePackageAlias).Build())
 
 	// Add method invocation:
 	//   result1, result2 := m.next.Method(arg1, arg2)
-	methodInvocation := common.NewMethodInvocation(b.methodConfig)
+	methodInvocation := commonbuilders.NewMethodInvocation(b.methodConfig)
 	methodInvocation.SetReceiver(&ast.SelectorExpr{
 		X:   ast.NewIdent("m"), // receiver name
 		Sel: ast.NewIdent("next"),
@@ -169,7 +169,7 @@ func (b *monitoringMethodBuilder) Build() ast.Decl {
 
 	// Add return statement
 	//   return result1, result2
-	returnResults := common.NewReturnResults(b.methodConfig)
+	returnResults := commonbuilders.NewReturnResults(b.methodConfig)
 	b.method.AddStatement(returnResults.Build())
 
 	return b.method.Build()
@@ -188,7 +188,7 @@ func (c *CounterAddAction) Build() ast.Stmt {
 		},
 		Args: []ast.Expr{
 			&ast.BasicLit{Kind: token.STRING, Value: `"operation"`},
-			&ast.BasicLit{Kind: token.STRING, Value: fmt.Sprintf(`"%s"`, common.ToSnakeCase(c.operationName))},
+			&ast.BasicLit{Kind: token.STRING, Value: fmt.Sprintf(`"%s"`, transformation.ToSnakeCase(c.operationName))},
 		},
 	}
 
@@ -238,7 +238,7 @@ func (i *IncreaseFailedOps) Build() ast.Stmt {
 		},
 		Args: []ast.Expr{
 			&ast.BasicLit{Kind: token.STRING, Value: `"operation"`},
-			&ast.BasicLit{Kind: token.STRING, Value: fmt.Sprintf(`"%s"`, common.ToSnakeCase(i.method.MethodName))},
+			&ast.BasicLit{Kind: token.STRING, Value: fmt.Sprintf(`"%s"`, transformation.ToSnakeCase(i.method.MethodName))},
 		},
 	}
 
@@ -305,7 +305,7 @@ func (r RecordOpDuration) Build() ast.Stmt {
 		},
 		Args: []ast.Expr{
 			&ast.BasicLit{Kind: token.STRING, Value: `"operation"`},
-			&ast.BasicLit{Kind: token.STRING, Value: fmt.Sprintf(`"%s"`, common.ToSnakeCase(r.operationName))},
+			&ast.BasicLit{Kind: token.STRING, Value: fmt.Sprintf(`"%s"`, transformation.ToSnakeCase(r.operationName))},
 		},
 	}
 

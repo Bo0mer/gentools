@@ -3,8 +3,7 @@ package gokit
 import (
 	"go/ast"
 
-	"github.com/Bo0mer/gentools/cmd/mongen/internal/common"
-
+	"github.com/Bo0mer/gentools/cmd/mongen/internal/commonbuilders"
 	"github.com/Bo0mer/gentools/pkg/astgen"
 )
 
@@ -32,9 +31,9 @@ func NewGoKitModel(interfacePath, interfaceName, structName, targetPkg string) *
 	file.AppendDeclaration(constructorBuilder)
 
 	strct.AddField("next", sourcePackageAlias, interfaceName)
-	strct.AddField(common.TotalOpsMetricName, metricsAlias, "Counter")
-	strct.AddField(common.FailedOpsMetricName, metricsAlias, "Counter")
-	strct.AddField(common.OpsDurationMetricName, metricsAlias, "Histogram")
+	strct.AddField(commonbuilders.TotalOpsMetricName, metricsAlias, "Counter")
+	strct.AddField(commonbuilders.FailedOpsMetricName, metricsAlias, "Counter")
+	strct.AddField(commonbuilders.OpsDurationMetricName, metricsAlias, "Histogram")
 
 	return m
 }

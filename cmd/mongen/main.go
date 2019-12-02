@@ -14,22 +14,18 @@ import (
 	"path"
 	"path/filepath"
 
-	"github.com/Bo0mer/gentools/cmd/mongen/internal/opencensus"
-
 	"github.com/Bo0mer/gentools/cmd/mongen/internal/gokit"
-
-	"github.com/Bo0mer/gentools/cmd/mongen/internal/common"
+	"github.com/Bo0mer/gentools/cmd/mongen/internal/opencensus"
 
 	"github.com/Bo0mer/gentools/pkg/astgen"
 	"github.com/Bo0mer/gentools/pkg/resolution"
+	"github.com/Bo0mer/gentools/pkg/transformation"
 )
 
 const (
 	goKitProvider      = "go-kit"
 	opencensusProvider = "opencensus"
 )
-
-var supportedProviders = []string{goKitProvider, opencensusProvider}
 
 type args struct {
 	sourceDir          string
@@ -124,15 +120,16 @@ func main() {
 	}
 
 	wd, _ := os.Getwd()
-	path, err := filepath.Rel(wd, fd.Name())
+	outPath, err := filepath.Rel(wd, fd.Name())
 	if err != nil {
-		path = fd.Name()
+		outPath = fd.Name()
 	}
-	fmt.Printf("Wrote monitoring implementation of %q to %q\n", sourcePkgPath+"."+args.interfaceName, path)
+	fmt.Printf("Wrote monitoring implementation of %q to %q\n", sourcePkgPath+"."+args.interfaceName, outPath)
+
 }
 
 func filename(interfaceName string) string {
-	return fmt.Sprintf("monitoring_%s.go", common.ToSnakeCase(interfaceName))
+	return fmt.Sprintf("monitoring_%s.go", transformation.ToSnakeCase(interfaceName))
 }
 
 func dirToImport(p string) (string, error) {

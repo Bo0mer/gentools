@@ -5,9 +5,9 @@ import (
 	"go/ast"
 	"go/token"
 
-	"github.com/Bo0mer/gentools/cmd/mongen/internal/common"
-
+	"github.com/Bo0mer/gentools/cmd/mongen/internal/commonbuilders"
 	"github.com/Bo0mer/gentools/pkg/astgen"
+	"github.com/Bo0mer/gentools/pkg/transformation"
 )
 
 type ocConstructorBuilder struct {
@@ -37,10 +37,10 @@ func (c *ocConstructorBuilder) Build() ast.Decl {
 						Type: ast.NewIdent(fmt.Sprintf("&monitoring%s", c.interfaceName)),
 						Elts: []ast.Expr{
 							ast.NewIdent("next"),
-							ast.NewIdent(common.TotalOpsMetricName),
-							ast.NewIdent(common.FailedOpsMetricName),
-							ast.NewIdent(common.OpsDurationMetricName),
-							ast.NewIdent(common.ContextDecoratorFuncName),
+							ast.NewIdent(commonbuilders.TotalOpsMetricName),
+							ast.NewIdent(commonbuilders.FailedOpsMetricName),
+							ast.NewIdent(commonbuilders.OpsDurationMetricName),
+							ast.NewIdent(commonbuilders.ContextDecoratorFuncName),
 						},
 					},
 				},
@@ -85,10 +85,10 @@ func (c *ocConstructorBuilder) Build() ast.Decl {
 			Params: &ast.FieldList{
 				List: []*ast.Field{
 					funcParamExpr("next", c.interfacePackageName, c.interfaceName, false),
-					funcParamExpr(common.TotalOpsMetricName, c.metricsPackageName, "Int64Measure", true),
-					funcParamExpr(common.FailedOpsMetricName, c.metricsPackageName, "Int64Measure", true),
-					funcParamExpr(common.OpsDurationMetricName, c.metricsPackageName, "Float64Measure", true),
-					buildCtxFuncParam(common.ContextDecoratorFuncName),
+					funcParamExpr(commonbuilders.TotalOpsMetricName, c.metricsPackageName, "Int64Measure", true),
+					funcParamExpr(commonbuilders.FailedOpsMetricName, c.metricsPackageName, "Int64Measure", true),
+					funcParamExpr(commonbuilders.OpsDurationMetricName, c.metricsPackageName, "Float64Measure", true),
+					buildCtxFuncParam(commonbuilders.ContextDecoratorFuncName),
 				},
 			},
 			Results: &ast.FieldList{
@@ -139,10 +139,10 @@ func newOCMonitoringMethodBuilder(structName string, methodConfig *astgen.Method
 		methodConfig:   methodConfig,
 		method:         method,
 		receiverName:   receiverName,
-		totalOps:       selexpr(common.TotalOpsMetricName),
-		failedOps:      selexpr(common.FailedOpsMetricName),
-		opsDuration:    selexpr(common.OpsDurationMetricName),
-		ctxFuncSel:     selexpr(common.ContextDecoratorFuncName),
+		totalOps:       selexpr(commonbuilders.TotalOpsMetricName),
+		failedOps:      selexpr(commonbuilders.FailedOpsMetricName),
+		opsDuration:    selexpr(commonbuilders.OpsDurationMetricName),
+		ctxFuncSel:     selexpr(commonbuilders.ContextDecoratorFuncName),
 		packageAliases: aliases,
 	}
 }
@@ -155,7 +155,7 @@ func (b *ocMonitoringMethodBuilder) Build() ast.Decl {
 			List: b.methodConfig.MethodParams,
 		},
 		Results: &ast.FieldList{
-			List: common.FieldsAsAnonymous(b.methodConfig.MethodResults),
+			List: transformation.FieldsAsAnonymous(b.methodConfig.MethodResults),
 		},
 	})
 
@@ -186,7 +186,7 @@ func (b *ocMonitoringMethodBuilder) Build() ast.Decl {
 	}
 	b.method.AddStatement(ctxDecorator.Build())
 
-	snakeCaseMethodName := common.ToSnakeCase(b.methodConfig.MethodName)
+	snakeCaseMethodName := transformation.ToSnakeCase(b.methodConfig.MethodName)
 	// Create an opencensus tag
 	//   tagKey, _ := tag.MustNewKey("operation")
 	createTagKey := &createTagKey{
@@ -222,14 +222,14 @@ func (b *ocMonitoringMethodBuilder) Build() ast.Decl {
 
 	// Add statement to capture current time
 	//   start := time.Now()
-	b.method.AddStatement(common.StartTimeRecorder{
+	b.method.AddStatement(commonbuilders.StartTimeRecorder{
 		TimePackageAlias: b.packageAliases.timePkg,
 		StartFieldName:   startFieldName,
 	}.Build())
 
 	// Add method invocation:
 	//   result1, result2 := m.next.Method(arg1, arg2)
-	methodInvocation := common.NewMethodInvocation(b.methodConfig)
+	methodInvocation := commonbuilders.NewMethodInvocation(b.methodConfig)
 	methodInvocation.SetReceiver(&ast.SelectorExpr{
 		X:   ast.NewIdent(b.receiverName),
 		Sel: ast.NewIdent("next"),
@@ -258,7 +258,7 @@ func (b *ocMonitoringMethodBuilder) Build() ast.Decl {
 
 	// Add return statement
 	//   return result1, result2
-	returnResults := common.NewReturnResults(b.methodConfig)
+	returnResults := commonbuilders.NewReturnResults(b.methodConfig)
 	b.method.AddStatement(returnResults.Build())
 
 	return b.method.Build()

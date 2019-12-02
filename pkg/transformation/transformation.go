@@ -1,19 +1,8 @@
-package common
+package transformation
 
 import (
 	"go/ast"
 	"unicode"
-)
-
-// constructor parameter names
-const (
-	// metric params
-	TotalOpsMetricName    = "totalOps"
-	FailedOpsMetricName   = "failedOps"
-	OpsDurationMetricName = "opsDuration"
-
-	// context decorator param
-	ContextDecoratorFuncName = "ctxFunc"
 )
 
 // ToSnakeCase transforms the provided string into snake case by inserting underscores between upper case or number word

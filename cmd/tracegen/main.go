@@ -10,10 +10,10 @@ import (
 	"os"
 	"path"
 	"path/filepath"
-	"unicode"
 
 	"github.com/Bo0mer/gentools/pkg/astgen"
 	"github.com/Bo0mer/gentools/pkg/resolution"
+	"github.com/Bo0mer/gentools/pkg/transformation"
 )
 
 func parseArgs() (sourceDir, interfaceName string, err error) {
@@ -90,7 +90,7 @@ func main() {
 }
 
 func filename(interfaceName string) string {
-	return fmt.Sprintf("tracing_%s.go", toSnakeCase(interfaceName))
+	return fmt.Sprintf("tracing_%s.go", transformation.ToSnakeCase(interfaceName))
 }
 
 func dirToImport(p string) (string, error) {
@@ -107,28 +107,4 @@ func importToDir(imp string) (string, error) {
 		return "", err
 	}
 	return pkg.Dir, nil
-}
-
-func toSnakeCase(in string) string {
-	runes := []rune(in)
-
-	var out []rune
-	for i := 0; i < len(runes); i++ {
-		if i > 0 && (unicode.IsUpper(runes[i]) || unicode.IsNumber(runes[i])) && ((i+1 < len(runes) && unicode.IsLower(runes[i+1])) || unicode.IsLower(runes[i-1])) {
-			out = append(out, '_')
-		}
-		out = append(out, unicode.ToLower(runes[i]))
-	}
-
-	return string(out)
-}
-
-func fieldsAsAnonymous(fields []*ast.Field) []*ast.Field {
-	result := make([]*ast.Field, len(fields))
-	for i, field := range fields {
-		result[i] = &ast.Field{
-			Type: field.Type,
-		}
-	}
-	return result
 }
