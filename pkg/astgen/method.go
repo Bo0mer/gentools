@@ -26,6 +26,9 @@ func (m *Method) SetType(funcType *ast.FuncType) {
 func (m *Method) AddStatement(stmt ast.Stmt) {
 	m.statements = append(m.statements, stmt)
 }
+func (m *Method) AddStatements(stmts []ast.Stmt) {
+	m.statements = append(m.statements, stmts...)
+}
 
 func (m *Method) Build() ast.Decl {
 	return &ast.FuncDecl{

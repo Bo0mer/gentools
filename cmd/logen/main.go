@@ -15,6 +15,7 @@ import (
 
 	"github.com/Bo0mer/gentools/pkg/astgen"
 	"github.com/Bo0mer/gentools/pkg/resolution"
+	"github.com/Bo0mer/gentools/pkg/transformation"
 )
 
 func parseArgs() (sourceDir, interfaceName string, err error) {
@@ -231,7 +232,7 @@ func (b *LoggingMethodBuilder) Build() ast.Decl {
 			List: b.methodConfig.MethodParams,
 		},
 		Results: &ast.FieldList{
-			List: fieldsAsAnonymous(b.methodConfig.MethodResults),
+			List: transformation.FieldsAsAnonymous(b.methodConfig.MethodResults),
 		},
 	})
 
@@ -480,14 +481,4 @@ func toSnakeCase(in string) string {
 	}
 
 	return string(out)
-}
-
-func fieldsAsAnonymous(fields []*ast.Field) []*ast.Field {
-	result := make([]*ast.Field, len(fields))
-	for i, field := range fields {
-		result[i] = &ast.Field{
-			Type: field.Type,
-		}
-	}
-	return result
 }

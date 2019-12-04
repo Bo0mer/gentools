@@ -30,7 +30,18 @@ $ mongen path/to/service Service
 Wrote monitoring implementation of "path/to/service.Service" to "path/to/service/servicews/monitoring_service.go"
 ```
 
+By default the generated implementation uses [go-kit metrics](https://github.com/go-kit/kit/tree/master/metrics). It can
+be changed to use [opencensus](https://github.com/census-instrumentation/opencensus-go) by providing it as a 3rd
+argument:
+
+```bash
+$ mongen path/to/service Service opencensus
+Wrote monitoring implementation of "path/to/service.Service" to "path/to/service/servicews/monitoring_service.go"
+```
+
 ### Using monitoring implementation in your program
+
+#### With Go-Kit
 
 Instantiate monitoring implementations with `NewMonitoring{InterfaceName}`:
 
@@ -38,6 +49,29 @@ Instantiate monitoring implementations with `NewMonitoring{InterfaceName}`:
 var svc Service = service.New()
 svc = servicemws.NewMonitoringService(svc, totalOps, faildOps, opsDuration)
 ```
+
+#### With Opencensus
+
+Usage with opencensus is similar with the addition of the `ctxFunc` parameter. It can be used to add custom labels at
+run time.
+
+```go
+ctxFunc := func(ctx context.Context) context.Context {
+  // modify the context the way you need it
+  ctx, _ = tag.New(ctx,
+    tag.Insert("service_name", "payments"),
+  )
+  return ctx
+}
+var svc Service = service.New()
+svc = servicemws.NewMonitoringService(svc, totalOps, faildOps, opsDuration, ctxFunc)
+```
+
+`ctxFunc` is optional and can be set to `nil`.
+
+### Examples
+
+See `cmd/mongen/examples` for the files that mongen produces.
 
 ## Using logen
 
