@@ -33,6 +33,25 @@ type args struct {
 	monitoringProvider string
 }
 
+func init() {
+	flag.Usage = func() {
+		var out io.Writer = os.Stdout
+
+		fmt.Fprintln(out, "A tool that generates monitoring wrappers for interfaces.")
+		fmt.Fprintf(out, "Usage: %s [-h] SOURCE_DIR INTERFACE_NAME [PROVIDER]\n", path.Base(os.Args[0]))
+		fmt.Fprintln(out, "")
+		fmt.Fprintln(out, "  Arguments:")
+		fmt.Fprintln(out, "    SOURCE_DIR       Path to the file containing the interface")
+		fmt.Fprintln(out, "    INTERFACE_NAME   Name of the interface which will be wrapped")
+		fmt.Fprintln(out, "    PROVIDER         Monitoring provider to be used for the generated code")
+		fmt.Fprintf(out, "                     Can be one of:  %s  %s\n", goKitProvider, opencensusProvider)
+		fmt.Fprintln(out, "")
+		fmt.Fprintln(out, "  Options:")
+		fmt.Fprintln(out, "    -h               Print this text and exit")
+		fmt.Fprintln(out, "")
+	}
+}
+
 func isValidProvider(provider string) bool {
 	return provider == goKitProvider || provider == opencensusProvider
 }

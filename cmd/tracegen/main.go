@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"go/ast"
 	"go/build"
+	"io"
 	"log"
 	"os"
 	"path"
@@ -15,6 +16,23 @@ import (
 	"github.com/Bo0mer/gentools/pkg/resolution"
 	"github.com/Bo0mer/gentools/pkg/transformation"
 )
+
+func init() {
+	flag.Usage = func() {
+		var out io.Writer = os.Stdout
+
+		fmt.Fprintln(out, "A tool that generates tracing wrappers for interfaces.")
+		fmt.Fprintf(out, "Usage: %s [-h] SOURCE_DIR INTERFACE_NAME\n", path.Base(os.Args[0]))
+		fmt.Fprintln(out, "")
+		fmt.Fprintln(out, "  Arguments:")
+		fmt.Fprintln(out, "    SOURCE_DIR       Path to the file containing the interface")
+		fmt.Fprintln(out, "    INTERFACE_NAME   Name of the interface which will be wrapped")
+		fmt.Fprintln(out, "")
+		fmt.Fprintln(out, "  Options:")
+		fmt.Fprintln(out, "    -h               Print this text and exit")
+		fmt.Fprintln(out, "")
+	}
+}
 
 func parseArgs() (sourceDir, interfaceName string, err error) {
 	flag.Parse()
