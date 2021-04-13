@@ -238,6 +238,10 @@ func newTraceMethodInvocation(tracePackageAlias, contextParamName, fullMethodNam
 	}
 }
 
+// TODO: Move MethodInvocation to a reusable package as
+// the same implementation can be seen multiple times
+// within this project.
+
 type MethodInvocation struct {
 	receiver *ast.SelectorExpr
 	method   *astgen.MethodConfig
@@ -253,7 +257,7 @@ func NewMethodInvocation(method *astgen.MethodConfig) *MethodInvocation {
 
 func (m *MethodInvocation) Build() ast.Stmt {
 	var paramSelectors []ast.Expr
-	var ellipsisPos token.Pos
+	ellipsisPos := token.NoPos
 	for _, param := range m.method.MethodParams {
 		paramSelectors = append(paramSelectors, ast.NewIdent(param.Names[0].String()))
 		if p, ok := param.Type.(*ast.Ellipsis); ok {

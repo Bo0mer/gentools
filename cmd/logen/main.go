@@ -398,6 +398,10 @@ func (b *LoggingMethodBuilder) conditionalLogMessageStatement(methodName, errorR
 	}
 }
 
+// TODO: Move MethodInvocation to a reusable package as
+// the same implementation can be seen multiple times
+// within this project.
+
 type MethodInvocation struct {
 	receiver *ast.SelectorExpr
 	method   *astgen.MethodConfig
@@ -418,8 +422,12 @@ func (m *MethodInvocation) Build() ast.Stmt {
 	}
 
 	paramSelectors := []ast.Expr{}
+	ellipsisPos := token.NoPos
 	for _, param := range m.method.MethodParams {
 		paramSelectors = append(paramSelectors, ast.NewIdent(param.Names[0].String()))
+		if p, ok := param.Type.(*ast.Ellipsis); ok {
+			ellipsisPos = p.Pos()
+		}
 	}
 
 	callExpr := &ast.CallExpr{
@@ -427,7 +435,8 @@ func (m *MethodInvocation) Build() ast.Stmt {
 			X:   m.receiver,
 			Sel: ast.NewIdent(m.method.MethodName),
 		},
-		Args: paramSelectors,
+		Args:     paramSelectors,
+		Ellipsis: ellipsisPos,
 	}
 
 	if m.method.HasResults() {
