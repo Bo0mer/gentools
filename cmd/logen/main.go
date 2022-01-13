@@ -17,6 +17,7 @@ import (
 	"github.com/Bo0mer/gentools/pkg/astgen"
 	"github.com/Bo0mer/gentools/pkg/resolution"
 	"github.com/Bo0mer/gentools/pkg/transformation"
+	"golang.org/x/tools/go/packages"
 )
 
 func init() {
@@ -69,7 +70,7 @@ func main() {
 	context := resolution.NewSingleLocationContext(sourcePkgPath)
 	d, err := locator.FindIdentType(context, ast.NewIdent(interfaceName))
 	if err != nil {
-		log.Fatal(err)
+		log.Fatalf("failed to find ident: %v", err)
 	}
 
 	typeName := fmt.Sprintf("errorLogging%s", interfaceName)
@@ -115,12 +116,19 @@ func filename(interfaceName string) string {
 }
 
 func dirToImport(p string) (string, error) {
-	pkg, err := build.ImportDir(p, build.FindOnly)
+	cfg := &packages.Config{
+		Mode: packages.NeedName,
+	}
+	ps, err := packages.Load(cfg, p)
 	if err != nil {
 		return "", err
 	}
-	return pkg.ImportPath, nil
+	if len(ps) == 0 {
+		return "", errors.New("could not find package to import")
+	}
+	return ps[0].PkgPath, nil
 }
+
 func importToDir(imp string) (string, error) {
 	pkg, err := build.Import(imp, "", build.FindOnly)
 	if err != nil {
