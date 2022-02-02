@@ -5,7 +5,6 @@ import (
 	"flag"
 	"fmt"
 	"go/ast"
-	"go/build"
 	"go/format"
 	"go/token"
 	"io"
@@ -16,6 +15,7 @@ import (
 
 	"github.com/Bo0mer/gentools/cmd/mongen/internal/gokit"
 	"github.com/Bo0mer/gentools/cmd/mongen/internal/opencensus"
+	"golang.org/x/tools/go/packages"
 
 	"github.com/Bo0mer/gentools/pkg/astgen"
 	"github.com/Bo0mer/gentools/pkg/resolution"
@@ -152,11 +152,17 @@ func filename(interfaceName string) string {
 }
 
 func dirToImport(p string) (string, error) {
-	pkg, err := build.ImportDir(p, build.FindOnly)
+	cfg := &packages.Config{
+		Mode: packages.NeedName,
+	}
+	ps, err := packages.Load(cfg, p)
 	if err != nil {
 		return "", err
 	}
-	return pkg.ImportPath, nil
+	if len(ps) == 0 {
+		return "", errors.New("could not find package to import")
+	}
+	return ps[0].PkgPath, nil
 }
 
 type astFileBuilder interface {
